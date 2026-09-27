@@ -135,8 +135,10 @@ async function main() {
   log.info(`run start ${today} slot ${slot}${dryRun ? ' (dry run)' : ''}`);
   const alerts = [];
 
+  log.step(1, 5, `Checking ${config.emailKid}'s school email and Classroom`);
   const school = await collectSchoolMail(db, today, alerts);
 
+  log.step(2, 5, `Reading ${config.teacherChat} on WhatsApp`);
   let wa;
   try {
     wa = await openWhatsApp();
@@ -149,10 +151,13 @@ async function main() {
     const chat = await collectTeacherChat(db, wa);
     const items = [...school.items, ...chat.items];
 
+    log.step(3, 5, items.length ? `Extracting tasks from ${items.length} new item(s) with the local model` : 'No new messages, skipping the model');
     if (items.length) {
+      log.info('loading model (takes ~10 s)...');
       loadModel();
       try {
-        for (const item of items) {
+        for (const [i, item] of items.entries()) {
+          log.info(`item ${i + 1}/${items.length}: ${item.kind}, ${item.date}`);
           const raw = await extractTasks(item, today);
           if (raw) {
             const { ok, dropped } = validateTasks(raw, { kid: item.kid, sourceId: item.sourceId, today, minConfidence: config.minConfidence });
@@ -169,20 +174,24 @@ async function main() {
     school.commit();
     chat.commit();
 
+    log.step(4, 5, "Building today's reminder");
     const tasks = tasksForToday(db, today);
+    log.info(`${tasks.length} task(s) to remind about`);
     const already = db.prepare('SELECT 1 FROM sent WHERE day = ? AND slot = ?').get(today, slot);
     if (tasks.length && (!already || dryRun)) {
       const mention = await wa.mentionId(db);
       const text = buildDigest(tasks, today, mentionToken(mention));
-      if (dryRun) {
-        console.log(`\n----- would send to "${config.groupName}" -----\n${text.replace(mentionToken(mention), '@' + config.mentionName)}\n`);
-      } else {
+      const readable = text.replace(mentionToken(mention), '@' + config.mentionName);
+      log.step(5, 5, dryRun ? 'Dry run: not sending' : `Sending to "${config.groupName}"`);
+      log.box(dryRun ? `would send to "${config.groupName}"` : `sending to "${config.groupName}"`, readable);
+      if (!dryRun) {
         await wa.sendToGroup(text, mention);
         db.prepare('INSERT INTO sent (day, slot, text, at) VALUES (?, ?, ?, ?)').run(today, slot, text, new Date().toISOString());
         db.prepare('UPDATE tasks SET unclear_sent = 1 WHERE date_unclear = 1').run();
         log.sent(`${config.groupName}: ${text.replace(/\n/g, ' | ')}`);
       }
     } else {
+      log.step(5, 5, 'Nothing to send');
       log.info(tasks.length ? `slot ${slot} already sent today` : 'no tasks today, nothing sent');
     }
 

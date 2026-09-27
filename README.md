@@ -61,6 +61,12 @@ npm run install:launchd  # schedule it
 
 Keep the Mac logged in to your user account (System Settings, Users & Groups, automatic login). WhatsApp and the Keychain need a user session.
 
+## Run on demand
+
+Double-click **`run-now.command`** in Finder. It opens Terminal, lets you pick **Enter** (send) or **d** (dry run), optionally runs `QUIT_ALL_COMMAND` from `.env` first (e.g. a script that quits other apps to free RAM for the model), then shows colored step-by-step progress. It won't overlap with a scheduled run.
+
+The first time, macOS may say it can't verify the file: right-click it, choose **Open**, then **Open** again.
+
 ## Scheduling
 
 - `RUN_TIMES` in `.env`, IST, comma separated. Default `10:00`.
