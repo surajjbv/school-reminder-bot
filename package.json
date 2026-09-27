@@ -1,0 +1,27 @@
+{
+  "name": "school-reminder-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local, headless bot that turns school emails and teacher WhatsApp messages into a daily WhatsApp to-do digest",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "postinstall": "swiftc -O native/extract.swift -o bin/extract",
+    "start": "node --disable-warning=ExperimentalWarning src/index.js",
+    "dry-run": "node --disable-warning=ExperimentalWarning src/index.js --dry-run",
+    "login:google": "node scripts/google-auth.js",
+    "login:school": "node --disable-warning=ExperimentalWarning scripts/school-login.js",
+    "login:whatsapp": "node --disable-warning=ExperimentalWarning scripts/whatsapp-login.js",
+    "install:launchd": "bash bin/install-launchd.sh",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  },
+  "dependencies": {
+    "puppeteer": "^24.38.0",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.26.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "license": "MIT"
+}

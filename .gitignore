@@ -1,0 +1,19 @@
+# Secrets (only .env.example is committed)
+.env
+.env.*
+!.env.example
+
+# Local state: SQLite DB, logs, WhatsApp session, school-account Chrome profile, downloads
+data/
+*.db
+*.db-*
+*.log
+
+# Build output / deps
+node_modules/
+bin/extract
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
