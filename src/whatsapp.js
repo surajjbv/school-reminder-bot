@@ -24,7 +24,9 @@ export function openWhatsApp({ onQr } = {}) {
     client.on('qr', (qr) => {
       if (onQr) return onQr(qr);
       clearTimeout(timer);
-      client.destroy().finally(() => reject(new WhatsAppLoggedOut('WhatsApp is unlinked: run `npm run login:whatsapp`')));
+      // Reject first: destroying the browser makes initialize() fail with a less useful error.
+      reject(new WhatsAppLoggedOut('WhatsApp is unlinked: run `npm run login:whatsapp`'));
+      client.destroy().catch(() => {});
     });
     client.on('auth_failure', (m) => { clearTimeout(timer); reject(new WhatsAppLoggedOut(`WhatsApp auth failed: ${m}`)); });
     client.on('ready', () => { clearTimeout(timer); resolve(wrap(client)); });
