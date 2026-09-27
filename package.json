@@ -15,7 +15,8 @@
     "login:school": "node --disable-warning=ExperimentalWarning scripts/school-login.js",
     "login:whatsapp": "node --disable-warning=ExperimentalWarning scripts/whatsapp-login.js",
     "install:launchd": "bash bin/install-launchd.sh",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
+    "unload-model": "~/.lmstudio/bin/lms unload school-reminder-bot"
   },
   "dependencies": {
     "puppeteer": "^24.38.0",

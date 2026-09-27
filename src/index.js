@@ -209,7 +209,11 @@ async function main() {
   log.info('run done');
 }
 
+// Log anything that would otherwise kill the run silently; exit handlers then unload the model.
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => { log.error(`run interrupted by ${sig}`); process.exit(130); });
+process.on('unhandledRejection', (e) => { log.failed(e); process.exit(1); });
+
 main().then(() => process.exit(0)).catch((e) => {
-  log.error(e.stack || e.message);
+  log.failed(e);
   process.exit(1);
 });

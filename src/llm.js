@@ -7,9 +7,10 @@ import { log } from './log.js';
 import { parseModelJson } from './tasks.js';
 
 const LMS = path.join(os.homedir(), '.lmstudio/bin/lms');
-const ID = 'school-reminder-bot';
+export const ID = 'school-reminder-bot';
 const MAX_INPUT_CHARS = 30000;
 let startedServer = false;
+let loaded = false;
 
 const lms = (...args) => execFileSync(LMS, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 
@@ -21,20 +22,36 @@ function resolveModelKey(model) {
   return m.modelKey;
 }
 
+const isLoaded = () => {
+  try { return JSON.parse(lms('ps', '--json')).some((m) => m.identifier === ID); } catch { return false; }
+};
+
 export function loadModel() {
   if (!JSON.parse(lms('server', 'status', '--json')).running) {
     lms('server', 'start');
     startedServer = true;
   }
   const key = resolveModelKey(config.model);
+  if (isLoaded()) { lms('unload', ID); log.warn('unloaded a copy of the model left over from an earlier run'); }
+  loaded = true; // set before loading so a crash mid-load still cleans up
   lms('load', key, '--identifier', ID, '--context-length', String(config.llmContext), '-y');
   log.info(`model loaded: ${key}`);
 }
 
+/** Unload only this bot's model (a model you loaded yourself in LM Studio is left alone). Safe to call twice. */
 export function unloadModel() {
-  try { lms('unload', '--all'); } catch { /* already unloaded */ }
-  if (startedServer) try { lms('server', 'stop'); } catch { /* ignore */ }
+  if (loaded) {
+    try { if (isLoaded()) lms('unload', ID); log.info('model unloaded'); } catch (e) { log.warn(`model unload failed: ${e.message.split('\n')[0]}`); }
+    loaded = false;
+  }
+  if (startedServer) {
+    try { lms('server', 'stop'); } catch { /* ignore */ }
+    startedServer = false;
+  }
 }
+
+// Last-resort cleanup on any exit (errors, Ctrl-C, kill) so the model never stays in RAM.
+process.on('exit', unloadModel);
 
 const SYSTEM = `You extract action items for a parent from school messages (emails, class announcements, spreadsheets, teacher WhatsApp messages, OCR text of notices).
 Return ONLY JSON: {"tasks":[{"kid":"<given kid>","action_line":"...","due_date":"YYYY-MM-DD or null","confidence":0.0-1.0}]}

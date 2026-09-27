@@ -30,6 +30,8 @@ export function openWhatsApp({ onQr } = {}) {
     });
     client.on('auth_failure', (m) => { clearTimeout(timer); reject(new WhatsAppLoggedOut(`WhatsApp auth failed: ${m}`)); });
     client.on('ready', () => { clearTimeout(timer); resolve(wrap(client)); });
+    client.on('disconnected', (reason) => log.warn(`WhatsApp disconnected: ${reason}`));
+    client.on('change_state', (state) => log.info(`WhatsApp state: ${state}`));
     client.initialize().catch(reject);
   });
 }
@@ -94,7 +96,9 @@ function wrap(client) {
     async sendToGroup(text, mentionId) {
       const id = await groupId();
       await humanDelay();
-      await client.sendMessage(id, text, { mentions: [mentionId] });
+      const msg = await client.sendMessage(id, text, { mentions: [mentionId] });
+      if (!msg?.id) throw new Error('WhatsApp returned no message id: send may have failed');
+      log.info(`WhatsApp accepted message ${msg.id.id}`);
     },
 
     async sendToSelf(text) {

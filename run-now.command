@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Double-click in Finder to run the bot once, on demand, with live progress.
+# Double-click in Finder to run the bot once and send today's reminder, with live progress.
 # Optionally quits other apps first (QUIT_ALL_COMMAND in .env) to free memory for the model.
 cd "${0:A:h}"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -16,18 +16,6 @@ echo
 [[ -f .env ]] || { echo "${RED}No .env file here. See README setup.${OFF}"; say_done 1; }
 command -v node >/dev/null || { echo "${RED}Node.js not found.${OFF}"; say_done 1; }
 
-echo "  ${GRN}[Enter]${OFF}  run and ${B}send${OFF} today's reminder to the group"
-echo "  ${CYN}[d]${OFF}      dry run: show the reminder, send nothing"
-echo "  ${YEL}[q]${OFF}      quit"
-echo
-read -k1 -s "choice?Your choice: "
-echo
-case "$choice" in
-  q|Q) echo "Cancelled."; exit 0 ;;
-  d|D) MODE="--dry-run"; echo "${CYN}Dry run selected.${OFF}" ;;
-  *)   MODE="";          echo "${GRN}Live run selected.${OFF}" ;;
-esac
-
 QUIT_ALL=$(grep -E '^QUIT_ALL_COMMAND=' .env | cut -d= -f2- | tr -d '"')
 QUIT_ALL=${QUIT_ALL/#\~/$HOME}
 if [[ -n "$QUIT_ALL" && -x "$QUIT_ALL" ]]; then
@@ -40,10 +28,11 @@ mkdir -p data/state
 if ! mkdir data/state/lock 2>/dev/null; then
   echo "${YEL}Another run is in progress. Try again in a few minutes.${OFF}"; say_done 1
 fi
-trap 'rmdir data/state/lock 2>/dev/null' EXIT
+# On any exit: release the lock and make sure the bot's model is not left in RAM.
+trap 'rmdir data/state/lock 2>/dev/null; ~/.lmstudio/bin/lms unload school-reminder-bot >/dev/null 2>&1' EXIT
 
 START=$SECONDS
-node --disable-warning=ExperimentalWarning src/index.js $MODE --slot "manual-$(date +%H%M%S)"
+node --disable-warning=ExperimentalWarning src/index.js --slot "manual-$(date +%H%M%S)"
 CODE=$?
 echo
 if (( CODE == 0 )); then

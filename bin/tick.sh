@@ -33,5 +33,8 @@ echo $(( tries + 1 )) > "$key.tries"
 
 if node --disable-warning=ExperimentalWarning src/index.js --slot "$slot" >> data/run.out 2>&1; then
   touch "$key.done"
+else
+  # Safety net if Node died hard: never leave the model in RAM.
+  "$HOME/.lmstudio/bin/lms" unload school-reminder-bot >/dev/null 2>&1
 fi
 find data/state -name '20*' -mtime +7 -delete 2>/dev/null

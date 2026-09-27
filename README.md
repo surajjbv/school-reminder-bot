@@ -63,9 +63,7 @@ Keep the Mac logged in to your user account (System Settings, Users & Groups, au
 
 ## Run on demand
 
-Double-click **`run-now.command`** in Finder. It opens Terminal, lets you pick **Enter** (send) or **d** (dry run), optionally runs `QUIT_ALL_COMMAND` from `.env` first (e.g. a script that quits other apps to free RAM for the model), then shows colored step-by-step progress. It won't overlap with a scheduled run.
-
-The first time, macOS may say it can't verify the file: right-click it, choose **Open**, then **Open** again.
+Double-click **`run-now.command`** in Finder. It opens Terminal, optionally runs `QUIT_ALL_COMMAND` from `.env` first (e.g. a script that quits other apps to free RAM for the model), then runs the bot and **sends** today's reminder, with colored step-by-step progress. It won't overlap with a scheduled run. (`npm run dry-run` still exists for testing changes without sending.)
 
 ## Scheduling
 
@@ -78,7 +76,8 @@ The first time, macOS may say it can't verify the file: right-click it, choose *
 
 - **School login expired** (many schools sign student accounts out every few days): you get a WhatsApp message in your own "Message yourself" chat. Run `npm run login:school` (about 30 seconds, and Chrome fills in the saved password). Emails and WhatsApp reminders keep working in the meantime. Emails with attachments are held and processed after you log in again.
 - **WhatsApp unlinked** (phone offline for about 14 days, or removed under Linked devices): you get a macOS notification. Run `npm run login:whatsapp`.
-- **Logs:** `data/bot.log` has errors, dropped tasks with reasons, and every sent message (`SENT` lines). Raw run output is in `data/run.out`.
+- **Model stuck in memory?** The bot unloads its model on success, errors, Ctrl-C and kill signals; a hard kill (`kill -9`, power loss) is cleaned up by the launcher, by the scheduler, or at the start of the next run. To unload by hand: `npm run unload-model` (only the bot's model; your own LM Studio models are left alone), or `lms unload --all`.
+- **Logs:** `data/bot.log` has every step, errors as `run FAILED during [step]: reason` plus the stack trace, crashes and interruptions, WhatsApp disconnects, dropped tasks with reasons, and every sent message (`SENT` lines, plus WhatsApp's message id). It rolls over to `bot.log.1` at 2 MB. Raw scheduled-run output is in `data/run.out`.
 
 ## Rules the code enforces
 

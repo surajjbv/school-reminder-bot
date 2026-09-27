@@ -2,10 +2,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA } from './config.js';
 
-const file = path.join(DATA, 'bot.log');
+// Tests (node --test sets NODE_TEST_CONTEXT) get their own log so data/bot.log stays clean.
+const file = path.join(DATA, process.env.NODE_TEST_CONTEXT ? 'test.log' : 'bot.log');
+const MAX_BYTES = 2e6;
+try { if (fs.statSync(file).size > MAX_BYTES) fs.renameSync(file, file + '.1'); } catch { /* no log yet */ }
+
 const color = process.stdout.isTTY && !process.env.NO_COLOR;
 const paint = (code, s) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
 const STYLE = { INFO: '36', WARN: '33', ERROR: '1;31', SENT: '1;32' };
+let currentStep = 'startup';
 
 // Callers must never pass secrets; tokens are only ever held in memory.
 function write(level, msg) {
@@ -19,11 +24,14 @@ export const log = {
   warn: (m) => write('WARN', m),
   error: (m) => write('ERROR', m),
   sent: (m) => write('SENT', m),
-  /** A visible step header in the terminal, e.g. "[2/5] Reading teacher's WhatsApp". */
+  /** A visible step header, e.g. "[2/5] Reading teacher's WhatsApp"; failures report the current step. */
   step: (n, total, m) => {
-    fs.appendFileSync(file, `${new Date().toISOString()} STEP  [${n}/${total}] ${m}\n`);
+    currentStep = `[${n}/${total}] ${m}`;
+    fs.appendFileSync(file, `${new Date().toISOString()} STEP  ${currentStep}\n`);
     console.log(`\n${paint('1;35', `[${n}/${total}]`)} ${paint('1', m)}`);
   },
+  /** Log a failure with the step it happened in and the full stack, for later diagnosis. */
+  failed: (e) => write('ERROR', `run FAILED during ${currentStep}: ${e?.message}\n${e?.stack || ''}`),
   /** Highlighted block (the digest) for the terminal only. */
   box: (title, body) => console.log(`\n${paint('1;32', `── ${title} ──`)}\n${body}\n${paint('1;32', '─'.repeat(title.length + 6))}`),
 };
