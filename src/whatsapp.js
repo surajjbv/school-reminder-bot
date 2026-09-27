@@ -35,18 +35,27 @@ export function openWhatsApp({ onQr } = {}) {
 }
 
 function wrap(client) {
-  const findChat = async (pred, label) => {
-    const chat = (await client.getChats()).find(pred);
-    if (!chat) throw new Error(`WhatsApp chat not found: ${label}`);
-    return chat;
+  // Look chats up via contacts: client.getChats() breaks on some WhatsApp Web versions.
+  let contacts;
+  const findContact = async (pred, label) => {
+    contacts ??= await client.getContacts();
+    // WhatsApp can list the same contact more than once; keep one per ID.
+    let matches = [...new Map(contacts.filter(pred).map((c) => [c.id._serialized, c])).values()];
+    // The same person can appear under a phone ID (@c.us) and a privacy ID (@lid); prefer the phone ID.
+    if (matches.length > 1) matches = matches.filter((c) => c.id.server !== 'lid');
+    if (matches.length !== 1) throw new Error(`WhatsApp: expected 1 contact "${label}", found ${matches.length}`);
+    return matches[0];
   };
+  const groupId = async () =>
+    (await findContact((c) => c.isGroup && c.name === config.groupName, config.groupName)).id._serialized;
 
   return {
     close: () => client.destroy(),
 
     /** The teacher's messages after `sinceSec`, each with text (caption + OCR of images/PDFs). */
     async readTeacherMessages(sinceSec) {
-      const chat = await findChat((c) => !c.isGroup && c.name === config.teacherChat, config.teacherChat);
+      const teacher = await findContact((c) => !c.isGroup && c.name === config.teacherChat, config.teacherChat);
+      const chat = await client.getChatById(teacher.id._serialized);
       await sleep(3000); // let history sync after being offline
       const msgs = (await chat.fetchMessages({ limit: 200 })).filter((m) => m.timestamp > sinceSec && !m.fromMe);
       fs.mkdirSync(MEDIA, { recursive: true });
@@ -71,26 +80,21 @@ function wrap(client) {
       return out;
     },
 
-    /** Find the person to @mention by saved contact name; cached after the first lookup. */
+    /** The person to @mention, by saved contact name; cached after the first lookup. */
     async mentionId(db) {
       let id = kvGet(db, 'mention_id');
       if (id) return id;
-      const group = await findChat((c) => c.isGroup && c.name === config.groupName, config.groupName);
-      for (const p of group.participants) {
-        const c = await client.getContactById(p.id._serialized);
-        if (c.name === config.mentionName || c.pushname === config.mentionName) { id = c.id._serialized; break; }
-      }
-      if (!id) throw new Error(`No member named "${config.mentionName}" in group "${config.groupName}"`);
+      const suffix = config.mentionNumberEndsWith;
+      id = (await findContact((c) => !c.isGroup && c.isMyContact && c.name === config.mentionName && (!suffix || c.id.user.endsWith(suffix)),
+        config.mentionName)).id._serialized;
       kvSet(db, 'mention_id', id);
       return id;
     },
 
     async sendToGroup(text, mentionId) {
-      const group = await findChat((c) => c.isGroup && c.name === config.groupName, config.groupName);
+      const id = await groupId();
       await humanDelay();
-      await group.sendStateTyping();
-      await humanDelay();
-      await group.sendMessage(text, { mentions: [mentionId] });
+      await client.sendMessage(id, text, { mentions: [mentionId] });
     },
 
     async sendToSelf(text) {

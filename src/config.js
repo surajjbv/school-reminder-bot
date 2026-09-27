@@ -26,13 +26,14 @@ export const config = {
 
   groupName: e.GROUP_NAME,
   mentionName: e.MENTION_NAME,
+  mentionNumberEndsWith: e.MENTION_NUMBER_ENDS_WITH,
 
   model: e.MODEL,
   promptMode: e.LLM_PROMPT_MODE || 'chatml-nothink',
   llmContext: Number(e.LLM_CONTEXT || 16384),
   minConfidence: Number(e.MIN_CONFIDENCE || 0.5),
   runTimes: (e.RUN_TIMES || '10:00').split(',').map((s) => s.trim()).filter(Boolean),
-  lookbackDays: Number(e.FIRST_RUN_LOOKBACK_DAYS || 7),
+  lookbackDays: Number(e.FIRST_RUN_LOOKBACK_DAYS || 14),
   chromePath: e.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   lmsUrl: 'http://127.0.0.1:1234',
 };

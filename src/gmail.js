@@ -1,6 +1,12 @@
-import { config } from './config.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { config, DATA } from './config.js';
 import { istDate } from './dates.js';
-import { htmlToText } from './extract.js';
+import { fileText, htmlToText } from './extract.js';
+import { log } from './log.js';
+
+const READABLE = /\.(pdf|png|jpe?g|heic|webp)$/i;
+const MAX_ATTACHMENT_BYTES = 15e6;
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
@@ -55,11 +61,37 @@ export async function fetchSchoolMails(afterMs) {
   for (const id of ids) {
     const m = await get(`${API}/messages/${id}?format=full`);
     const header = (n) => m.payload.headers.find((h) => h.name.toLowerCase() === n)?.value || '';
-    const { text, raw } = bodyText(m.payload);
+    let { text, raw } = bodyText(m.payload);
+    for (const a of attachmentParts(m.payload)) text += await attachmentText(get, id, a);
     const ms = Number(m.internalDate);
     mails.push({ id, ms, date: istDate(ms), subject: header('subject'), from: header('from'), text, raw });
   }
   return mails.sort((a, b) => a.ms - b.ms);
+}
+
+function attachmentParts(payload) {
+  const out = [];
+  const walk = (p) => {
+    if (p.filename && p.body?.attachmentId && READABLE.test(p.filename) && p.body.size <= MAX_ATTACHMENT_BYTES) out.push(p);
+    (p.parts || []).forEach(walk);
+  };
+  walk(payload);
+  return out;
+}
+
+/** OCR / PDF text of an emailed attachment (circulars are often only in the PDF). */
+async function attachmentText(get, messageId, part) {
+  const file = path.join(DATA, `att-${messageId}-${part.filename.replace(/[^\w.-]/g, '_')}`);
+  try {
+    const { data } = await get(`${API}/messages/${messageId}/attachments/${part.body.attachmentId}`);
+    fs.writeFileSync(file, Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64'));
+    return `\n\n[Attached ${part.filename}]\n${fileText(file).slice(0, 15000)}`;
+  } catch (e) {
+    log.warn(`could not read attachment ${part.filename}: ${e.message}`);
+    return '';
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
 }
 
 /** Classroom post URL hidden in the "See details" AccountChooser link. */
