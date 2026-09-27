@@ -43,6 +43,7 @@ Rules:
 - Only things the parent/child must DO or BRING, or dated events to attend. Ignore circulars with no action, recaps of past events, promotions, greetings.
 - Resolve relative dates ("tomorrow", "Monday", "29/09") against the message date. Dates are Indian format (DD/MM). Timezone IST.
 - For deadlines ("fill form by 18th") use that deadline as due_date.
+- Registration/sign-up for an event with no stated deadline: due_date is the event date. Merge "register" and "attend" for the same event into one task.
 - If a task clearly exists but its date is unknown, set due_date to null.
 - One task per distinct action. No tasks -> {"tasks":[]}.`;
 
