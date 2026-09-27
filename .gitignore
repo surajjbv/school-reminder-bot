@@ -17,3 +17,7 @@ bin/extract
 .DS_Store
 .vscode/
 .idea/
+
+# whatsapp-web.js page cache
+.wwebjs_cache/
+.wwebjs_auth/
