@@ -10,13 +10,11 @@
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning bot.js",
     "login:google": "node --disable-warning=ExperimentalWarning login.js google",
-    "login:school": "node --disable-warning=ExperimentalWarning login.js school",
     "login:whatsapp": "node --disable-warning=ExperimentalWarning login.js whatsapp",
     "schedule": "bash schedule.sh install",
     "test": "node --disable-warning=ExperimentalWarning --test test.js"
   },
   "dependencies": {
-    "puppeteer": "^24.38.0",
     "qrcode-terminal": "^0.12.0",
     "whatsapp-web.js": "github:wwebjs/whatsapp-web.js#58ddf1561cd783d6a548fa812eb70a05944604b4",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"

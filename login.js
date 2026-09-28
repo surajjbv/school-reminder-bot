@@ -1,14 +1,17 @@
-// One-time logins:  node login.js google | school | whatsapp
-import { execFile, spawn } from 'node:child_process';
+// One-time logins:  node login.js google | whatsapp
+import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import qrcode from 'qrcode-terminal';
 import { config, requireConfig, ROOT } from './lib.js';
-import { openClassroom, openWhatsApp, PROFILE } from './sources.js';
+import { openWhatsApp } from './sources.js';
 
 const what = process.argv[2];
+// Read-only: the kid's mail, Classroom courses/posts/assignments/materials, and attached Drive files.
+const SCOPES = ['gmail.readonly', 'classroom.courses.readonly', 'classroom.announcements.readonly', 'classroom.coursework.me.readonly',
+  'classroom.courseworkmaterials.readonly', 'drive.readonly'].map((s) => `https://www.googleapis.com/auth/${s}`);
 
 if (what === 'google') {
   // Read-only Gmail access for the account whose mail the bot reads; the refresh token is saved into .env.
@@ -19,7 +22,7 @@ if (what === 'google') {
     const client = { client_id: config.googleClientId, client_secret: config.googleClientSecret, redirect_uri: redirect };
     const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
       client_id: client.client_id, redirect_uri: redirect, response_type: 'code', access_type: 'offline', prompt: 'select_account consent', state,
-      scope: 'https://www.googleapis.com/auth/gmail.readonly',
+      scope: SCOPES.join(' '),
     });
     execFile('open', [url]);
     console.log(`If no browser opened, visit:\n${url}\n`);
@@ -40,18 +43,6 @@ if (what === 'google') {
       process.exit(0);
     });
   });
-} else if (what === 'school') {
-  // A normal (not automated) Chrome window on the bot's profile; sign in by hand, then Cmd+Q.
-  requireConfig('schoolAccount');
-  console.log(`Sign in as ${config.schoolAccount}, let Chrome save the password, then QUIT that window with Cmd+Q.`);
-  const url = `https://accounts.google.com/AccountChooser?Email=${encodeURIComponent(config.schoolAccount)}&continue=https://classroom.google.com/`;
-  spawn(config.chromePath, [`--user-data-dir=${PROFILE}`, '--no-first-run', '--no-default-browser-check', url], { stdio: 'ignore' })
-    .on('exit', async () => {
-      const s = await openClassroom();
-      try { await s.checkLogin(); console.log(`OK: ${config.schoolAccount} is signed in.`); }
-      catch (err) { console.error(`Not signed in (${err.message}). Run \`npm run login:school\` again.`); process.exitCode = 1; }
-      finally { await s.close(); }
-    });
 } else if (what === 'whatsapp') {
   // Link the bot as a device: WhatsApp > Settings > Linked devices > Link a device.
   console.log('Starting WhatsApp Web...');
@@ -60,6 +51,6 @@ if (what === 'google') {
   await wa.close();
   process.exit(0);
 } else {
-  console.error('Usage: node login.js google | school | whatsapp');
+  console.error('Usage: node login.js google | whatsapp');
   process.exit(1);
 }

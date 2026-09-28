@@ -1,6 +1,5 @@
 // Shared helpers: config, logging, dates, storage, task rules, text extraction, local model.
 import { execFile, execFileSync } from 'node:child_process';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,8 +20,7 @@ export const config = {
   googleClientSecret: e.GOOGLE_CLIENT_SECRET,
   googleRefreshToken: e.GOOGLE_REFRESH_TOKEN,
   emailKid: e.EMAIL_KID_NAME,
-  schoolAccount: e.SCHOOL_ACCOUNT_EMAIL,
-  schoolQuery: e.SCHOOL_GMAIL_QUERY || `to:${e.SCHOOL_ACCOUNT_EMAIL}`,
+  schoolQuery: e.SCHOOL_GMAIL_QUERY || '-from:accounts.google.com',
   chatKid: e.CHAT_KID_NAME,
   teacherChat: e.TEACHER_CHAT_NAME,
   groupName: e.GROUP_NAME,
@@ -95,7 +93,8 @@ export function openDb(file = path.join(DATA, 'bot.db')) {
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
     CREATE TABLE IF NOT EXISTS processed (source_id TEXT PRIMARY KEY, at TEXT);
-    CREATE TABLE IF NOT EXISTS docs (id TEXT PRIMARY KEY, kind TEXT, hash TEXT, first_seen TEXT);
+    DROP TABLE IF EXISTS docs;
+    CREATE TABLE IF NOT EXISTS watched (id TEXT PRIMARY KEY, modified TEXT, first_seen TEXT); -- attached Sheets/Docs re-checked for edits
     CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY, kid TEXT, action_line TEXT, due_date TEXT,
       date_unclear INTEGER DEFAULT 0, last_sent TEXT, confidence REAL, source_id TEXT, first_seen TEXT);
@@ -241,17 +240,6 @@ export function driveLinks(text) {
   return [...out.values()];
 }
 
-/** Classroom post URL hidden in the email's "See details" AccountChooser link. */
-export function classroomPostUrl(raw) {
-  for (const m of raw.matchAll(/continue=(https:\/\/classroom\.google\.com\/c\/[^&"\s>]+)/g)) {
-    const url = decodeURIComponent(m[1]).split('?')[0];
-    if (url.includes('/p/')) return url;
-  }
-  return null;
-}
-
-export const sha1 = (s) => crypto.createHash('sha1').update(s).digest('hex');
-
 // ── local model (LM Studio) ───────────────────────────────────────────────
 // Reuses the model if it's already loaded (and leaves it loaded); otherwise loads it,
 // and unloads it on exit, including on errors and Ctrl-C.
@@ -290,16 +278,19 @@ export function releaseModel() {
 process.on('exit', releaseModel);
 
 const SYSTEM = `You extract action items for a parent from school messages (emails, class announcements, spreadsheets, teacher WhatsApp messages, OCR text of notices).
-Return ONLY JSON: {"tasks":[{"kid":"<given kid>","action_line":"...","due_date":"YYYY-MM-DD or null","confidence":0.0-1.0}]}
+Return ONLY JSON: {"tasks":[{"action_line":"...","due_date":"YYYY-MM-DD or null","confidence":0.0-1.0}]}
 Rules:
-- action_line: imperative, max 12 words, concrete (e.g. "Bring colour palette", "Finish Maths homework pg 12", "Register for Navarathri performance").
+- action_line: starts with a verb, max 12 words, concrete, no dates in it. Use only what the message says; never invent tasks.
 - Only things the parent/child must DO or BRING, or dated events to attend. Ignore circulars with no action, recaps of past events, promotions, greetings.
+- "View/see/access/check the attachment, picture, folder, link or timetable" is NOT a task.
+- Lines like "Completed pg 10", "Introduction of ...", "Reinforcement of ..." describe class work already done: they are NOT tasks. In weekly-update sheets, tasks are under "Practice work"/"Submission Dates" and "Requirements".
 - Ignore OTP / verification-code / password emails completely, and never put any code or password in action_line.
 - Resolve relative dates ("tomorrow", "Monday", "29/09") against the message date. Dates are Indian format (DD/MM). Timezone IST.
+- Skip tasks whose due date is before Today (e.g. older weeks in a homework sheet).
 - For deadlines ("fill form by 18th") use that deadline as due_date.
 - Registration/sign-up for an event with no stated deadline: due_date is the event date. Merge "register" and "attend" for the same event into one task.
 - If a task clearly exists but its date is unknown, set due_date to null.
-- One task per distinct action. No tasks -> {"tasks":[]}.`;
+- One task per distinct action, at most 10, most important first. No tasks -> {"tasks":[]}.`;
 
 async function complete(messages) {
   // Qwen chat format ending in an empty <think> block: skips hidden reasoning (~10x faster).
@@ -307,7 +298,7 @@ async function complete(messages) {
   const res = await fetch('http://127.0.0.1:1234/v1/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: model?.id ?? MODEL_ID, prompt, temperature: 0, max_tokens: 1500, stop: ['<|im_end|>'] }),
+    body: JSON.stringify({ model: model?.id ?? MODEL_ID, prompt, temperature: 0, max_tokens: 1000, stop: ['<|im_end|>'] }),
     signal: AbortSignal.timeout(5 * 60 * 1000),
   });
   if (!res.ok) throw new Error(`LM Studio ${res.status}: ${(await res.text()).slice(0, 200)}`);

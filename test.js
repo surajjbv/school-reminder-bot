@@ -5,7 +5,7 @@ import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as XLSX from 'xlsx';
 import {
-  buildDigest, classroomPostUrl, driveLinks, ensureModel, extractTasks, fileText, isDuplicate,
+  buildDigest, driveLinks, ensureModel, extractTasks, fileText, isDuplicate,
   markSent, openDb, parseModelJson, releaseModel, saveTasks, sheetText, tasksToSend, validateTasks,
 } from './lib.js';
 
@@ -103,8 +103,7 @@ test('first message of the day: full list; later: only new; daily until due, the
 });
 
 // ── sources ──
-test('email: finds the Classroom post and Drive links', () => {
-  assert.equal(classroomPostUrl(EMAIL), 'https://classroom.google.com/c/MTExMTEx/p/MjIyMjIy');
+test('email: finds Drive links', () => {
   assert.deepEqual(driveLinks(EMAIL), [{ id: '1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789', kind: 'sheet' }]);
 });
 

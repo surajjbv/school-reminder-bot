@@ -2,82 +2,74 @@
 // Usage: node bot.js [--slot HH:MM]
 import { execFileSync } from 'node:child_process';
 import {
-  addDays, buildDigest, classroomPostUrl, config, driveLinks, ensureModel, extractTasks, isProcessed, istDate, istTime,
+  addDays, buildDigest, config, ensureModel, extractTasks, isProcessed, istDate, istTime,
   kvGet, kvSet, log, markProcessed, openDb, releaseModel, requireConfig, markSent, saveTasks, tasksToSend, validateTasks,
 } from './lib.js';
-import { fetchSchoolMails, LoginExpired, openClassroom, openWhatsApp, WhatsAppLoggedOut } from './sources.js';
+import { classroomPosts, driveModified, driveText, fetchSchoolMails, openWhatsApp, WhatsAppLoggedOut } from './sources.js';
 
 const args = process.argv.slice(2);
 const slot = args.includes('--slot') ? args[args.indexOf('--slot') + 1] : istTime();
-const WATCH_DAYS = 14; // re-check linked Sheets/Docs this long for edits
-const MAX_NESTED = 5; // Docs often link to the real homework Sheet; follow a few
+const WATCH_DAYS = 14; // re-check attached Sheets/Docs this long for edits
+const MAX_NESTED = 5;
+const RETRY_WINDOW = 3 * 864e5;
 
-const loginAlert = () => ({
-  key: 'school-login',
-  text: `School reminder bot: ${config.emailKid}'s school login expired. On the Mac run: npm run login:school (about 30 sec). Classroom attachments wait until then.`,
-});
+/** New school emails and Classroom posts (with attached Drive files), plus edits to recently seen Sheets/Docs. */
+async function collectSchool(db, today) {
+  const since = (key, days) => Number(kvGet(db, key) || Date.now() - days * 864e5);
+  const mailSince = since('gmail_last_ms', config.emailLookbackDays);
+  const postSince = since('classroom_last_ms', config.emailLookbackDays);
+  // Look 3 days behind the markers so items whose extraction failed are retried (processed ones are skipped).
+  const [mails, posts] = await Promise.all([fetchSchoolMails(mailSince - RETRY_WINDOW), classroomPosts(postSince - RETRY_WINDOW)]);
+  const newMails = mails.filter((m) => !isProcessed(db, `gmail:${m.id}`));
+  const newPosts = posts.filter((p) => !isProcessed(db, `cls:${p.id}:${p.ms}`));
+  log.info(`gmail: ${newMails.length} new school mail(s); classroom: ${newPosts.length} new post(s)`);
 
-async function collectSchoolMail(db, today, alerts) {
-  const lastMs = Number(kvGet(db, 'gmail_last_ms') || Date.now() - config.emailLookbackDays * 864e5);
-  const mails = (await fetchSchoolMails(lastMs - 60000)).filter((m) => !isProcessed(db, `gmail:${m.id}`));
-  log.info(`gmail: ${mails.length} new school mail(s)`);
-
-  const watched = db.prepare('SELECT * FROM docs WHERE first_seen >= ?').all(addDays(today, -WATCH_DAYS));
-  const needsBrowser = watched.length || mails.some((m) => classroomPostUrl(m.raw) || driveLinks(m.raw).length);
-  const items = [];
-  let heldFromMs = null; // mails whose attachments couldn't be read wait for the next run
-  let browser = null;
-
-  try {
-    if (needsBrowser) {
-      browser = await openClassroom();
-      await browser.checkLogin();
+  // Each Drive file is read once per run; Docs often link to the real homework Sheet, so follow a few.
+  const cache = new Map();
+  const read = (id) => {
+    if (!cache.has(id)) cache.set(id, driveText(id).catch((err) => { log.warn(`could not read Drive file ${id}: ${err.message}`); return null; }));
+    return cache.get(id);
+  };
+  const remember = db.prepare('INSERT OR REPLACE INTO watched (id, modified, first_seen) VALUES (?, ?, COALESCE((SELECT first_seen FROM watched WHERE id = ?), ?))');
+  async function withFiles(text, ids) {
+    const queue = [...new Set(ids)];
+    for (const id of queue) {
+      const f = await read(id);
+      if (!f) continue;
+      text += `\n\n[Attached: ${f.name}]\n${f.text}`;
+      remember.run(id, f.modified, id, today);
+      for (const l of f.links) if (l.kind !== 'file' && !queue.includes(l.id) && queue.length < ids.length + MAX_NESTED) queue.push(l.id);
     }
-    const fetched = new Set();
-    for (const m of mails) {
-      const post = classroomPostUrl(m.raw);
-      let links = driveLinks(m.raw);
-      let text = `Subject: ${m.subject}\nFrom: ${m.from}\n\n${m.text}`;
-      if (post) links = [...links, ...(await browser.postLinks(post))];
-      const queue = links.filter((l) => !fetched.has(l.id));
-      for (const link of queue) {
-        if (fetched.has(link.id)) continue;
-        fetched.add(link.id);
-        const r = await browser.fileText(link);
-        if (!r) continue;
-        text += `\n\n[Attached ${link.kind}]\n${r.text}`;
-        if (link.kind === 'doc' || link.kind === 'sheet') {
-          db.prepare('INSERT OR REPLACE INTO docs VALUES (?, ?, ?, ?)').run(link.id, link.kind, r.hash, today);
-        }
-        for (const n of r.links) if (!fetched.has(n.id) && n.kind !== 'file' && queue.length < links.length + MAX_NESTED) queue.push(n);
-      }
-      items.push({ sourceId: `gmail:${m.id}`, kid: config.emailKid, kind: 'school email / Classroom post', date: m.date, text, markIds: [`gmail:${m.id}`] });
-    }
-    // Sheets/Docs get edited in place (e.g. weekly homework): re-read recent ones for changes.
-    for (const d of watched) {
-      if (fetched.has(d.id)) continue;
-      const r = await browser.fileText(d);
-      if (!r || r.hash === d.hash) continue;
-      db.prepare('UPDATE docs SET hash = ? WHERE id = ?').run(r.hash, d.id);
-      items.push({ sourceId: `doc:${d.id}:${r.hash.slice(0, 8)}`, kid: config.emailKid, kind: `updated school ${d.kind}`, date: today, text: r.text, markIds: [] });
-    }
-  } catch (err) {
-    if (!(err instanceof LoginExpired)) throw err;
-    alerts.push(loginAlert());
-    // Keep mails without attachments; hold back the rest until the login is renewed.
-    const done = new Set(items.map((i) => i.sourceId));
-    for (const m of mails) {
-      if (done.has(`gmail:${m.id}`)) continue;
-      if (classroomPostUrl(m.raw) || driveLinks(m.raw).length) { heldFromMs ??= m.ms; continue; }
-      items.push({ sourceId: `gmail:${m.id}`, kid: config.emailKid, kind: 'school email', date: m.date, text: `Subject: ${m.subject}\n\n${m.text}`, markIds: [`gmail:${m.id}`] });
-    }
-  } finally {
-    await browser?.close();
+    return text;
   }
 
-  const newest = mails.length ? mails.at(-1).ms : lastMs;
-  const watermark = heldFromMs ? Math.min(heldFromMs - 1, newest) : newest;
-  return { items, commit: () => kvSet(db, 'gmail_last_ms', Math.max(watermark, lastMs)) };
+  const items = await Promise.all([
+    ...newMails.map(async (m) => ({
+      sourceId: `gmail:${m.id}`, kid: config.emailKid, kind: 'school email', date: m.date, markIds: [`gmail:${m.id}`],
+      text: await withFiles(`Subject: ${m.subject}\nFrom: ${m.from}\n\n${m.text}`, m.links.map((l) => l.id)),
+    })),
+    ...newPosts.map(async (p) => ({
+      sourceId: `cls:${p.id}`, kid: config.emailKid, kind: p.kind, date: p.date, markIds: [`cls:${p.id}:${p.ms}`],
+      text: await withFiles(p.text, p.driveIds),
+    })),
+  ]);
+
+  // Sheets/Docs get edited in place (e.g. the weekly homework Sheet): re-read recent ones only if they changed.
+  for (const w of db.prepare('SELECT * FROM watched WHERE first_seen >= ?').all(addDays(today, -WATCH_DAYS))) {
+    if (cache.has(w.id)) continue;
+    const modified = await driveModified(w.id).catch(() => w.modified);
+    if (modified === w.modified) continue;
+    const f = await read(w.id);
+    if (!f) continue;
+    remember.run(w.id, f.modified, w.id, today);
+    items.push({ sourceId: `drive:${w.id}:${f.modified}`, kid: config.emailKid, kind: 'edited school document', date: today, text: `[${f.name}]\n${f.text}`, markIds: [] });
+  }
+
+  const newest = (list, fallback) => Math.max(fallback, ...list.map((x) => x.ms));
+  return {
+    items,
+    commit: () => { kvSet(db, 'gmail_last_ms', newest(mails, mailSince)); kvSet(db, 'classroom_last_ms', newest(posts, postSince)); },
+  };
 }
 
 async function collectTeacherChat(db, wa) {
@@ -96,18 +88,17 @@ async function collectTeacherChat(db, wa) {
 }
 
 async function main() {
-  requireConfig('emailKid', 'schoolAccount', 'chatKid', 'teacherChat', 'groupName', 'mentionName');
+  requireConfig('emailKid', 'chatKid', 'teacherChat', 'groupName', 'mentionName');
   const today = istDate();
   const db = openDb();
   log.info(`run start ${today} slot ${slot}`);
-  const alerts = [];
   let wa;
 
   // WhatsApp takes ~15 s to start: warm it up while Gmail/Classroom are read.
   const waStarting = openWhatsApp(db).then((w) => (wa = w), (err) => err);
   try {
     log.step(1, `Checking ${config.emailKid}'s school email and Classroom`);
-    const school = await collectSchoolMail(db, today, alerts);
+    const school = await collectSchool(db, today);
 
     log.step(2, `Reading ${config.teacherChat} on WhatsApp`);
     const waResult = await waStarting;
@@ -131,6 +122,12 @@ async function main() {
             const { ok, dropped } = validateTasks(raw, { kid: item.kid, sourceId: item.sourceId, today });
             dropped.forEach((d) => log.info(`dropped from ${item.sourceId}: "${d.t?.action_line}" (${d.why})`));
             log.info(`${item.sourceId}: ${ok.length} task(s), ${saveTasks(db, ok, today)} new`);
+          } else {
+            // Unreadable model reply: retry on the next runs; give up (logged) after 3 attempts.
+            const tries = Number(kvGet(db, `tries:${item.sourceId}`) || 0) + 1;
+            kvSet(db, `tries:${item.sourceId}`, tries);
+            if (tries < 3) { log.warn(`${item.sourceId}: will retry next run (attempt ${tries}/3)`); continue; }
+            log.error(`${item.sourceId}: gave up after 3 attempts`);
           }
           item.markIds.forEach((id) => markProcessed(db, id));
         }
@@ -157,13 +154,6 @@ async function main() {
     } else {
       log.step(5, 'Nothing to send');
       log.info(tasks.length ? `slot ${slot} already sent today` : newOnly ? 'nothing new since the last message' : 'no tasks today, nothing sent');
-    }
-
-    for (const a of alerts) {
-      if (kvGet(db, `alert:${a.key}`) === today) continue; // at most one nag per day
-      await wa.sendToSelf(a.text);
-      kvSet(db, `alert:${a.key}`, today);
-      log.warn(`alert sent to self: ${a.key}`);
     }
   } catch (err) {
     // Tell the user without them having to read logs: WhatsApp to self, else a macOS notification.
