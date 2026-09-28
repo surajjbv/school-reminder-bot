@@ -1,6 +1,5 @@
 #!/bin/zsh
 # Double-click in Finder to run the bot once and send today's reminder, with live progress.
-# Optionally quits other apps first (QUIT_ALL_COMMAND in .env) to free memory for the model.
 cd "${0:A:h}"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
@@ -15,13 +14,6 @@ echo
 
 [[ -f .env ]] || { echo "${RED}No .env file here. See README setup.${OFF}"; say_done 1; }
 command -v node >/dev/null || { echo "${RED}Node.js not found.${OFF}"; say_done 1; }
-
-QUIT_ALL=$(grep -E '^QUIT_ALL_COMMAND=' .env | cut -d= -f2- | tr -d '"')
-QUIT_ALL=${QUIT_ALL/#\~/$HOME}
-if [[ -n "$QUIT_ALL" && -x "$QUIT_ALL" ]]; then
-  echo; echo "${MAG}[0/5]${OFF} ${B}Quitting other apps${OFF} ${DIM}($QUIT_ALL)${OFF}"
-  "$QUIT_ALL" && sleep 3
-fi
 
 # Don't overlap with a scheduled run.
 mkdir -p data/state

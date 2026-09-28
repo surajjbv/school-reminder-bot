@@ -19,7 +19,7 @@ It starts, does the work, and exits: browsers closed, model unloaded (unless you
 | `lib.js` | config, logging, storage, task rules, text extraction, local model |
 | `login.js` | one-time logins (`google`, `school`, `whatsapp`) |
 | `ocr.swift` | macOS Vision OCR / PDF text helper, compiled on first use |
-| `run-now.command` | double-click to run now |
+| `run-now.command` | double-click to run now (sends) |
 | `schedule.sh` | daily schedule via launchd |
 | `test.js` | tests (sample email, 3-tab sheet, image) |
 
