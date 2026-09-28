@@ -181,6 +181,24 @@ function whatsapp(client, db) {
   }
   const groupId = () => chatId('wa_group', (c) => c.isGroup && c.name === config.groupName, config.groupName);
 
+  // sendMessage() returns once the message is queued in the browser, not sent. Closing the
+  // browser then leaves it stuck as "pending", so wait until WhatsApp's server has it.
+  const ACK = { 1: 'on WhatsApp server', 2: 'delivered', 3: 'read' };
+  async function sendConfirmed(to, text, options) {
+    const msg = await client.sendMessage(to, text, options);
+    if (!msg?.id) throw new Error('WhatsApp did not create the message');
+    let ack = msg.ack;
+    for (const end = Date.now() + 60000; ack < 1 && Date.now() < end; await sleep(500)) {
+      ack = (await client.getMessageById(msg.id._serialized))?.ack ?? ack;
+      if (ack === -1) break;
+    }
+    if (ack < 1) throw new Error(`WhatsApp message ${msg.id.id} not sent (status ${ack === -1 ? 'error' : 'still pending after 60 s'})`);
+    for (const end = Date.now() + 5000; ack < 2 && Date.now() < end; await sleep(500)) { // brief look for "delivered", for the log
+      ack = (await client.getMessageById(msg.id._serialized))?.ack ?? ack;
+    }
+    log.info(`WhatsApp message ${msg.id.id}: ${ACK[ack] ?? ack}`);
+  }
+
   return {
     close: () => client.destroy(),
 
@@ -228,11 +246,9 @@ function whatsapp(client, db) {
     async sendToGroup(text, mentionId) {
       const id = await groupId();
       await sleep(1000 + Math.random() * 2000); // small human-like pause
-      const msg = await client.sendMessage(id, text, { mentions: [mentionId] });
-      if (!msg?.id) throw new Error('WhatsApp returned no message id: send may have failed');
-      log.info(`WhatsApp accepted message ${msg.id.id}`);
+      await sendConfirmed(id, text, { mentions: [mentionId] });
     },
 
-    sendToSelf: (text) => client.sendMessage(client.info.wid._serialized, text),
+    sendToSelf: (text) => sendConfirmed(client.info.wid._serialized, text),
   };
 }
