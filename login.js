@@ -17,10 +17,12 @@ if (what === 'google') {
   const server = http.createServer().listen(0, '127.0.0.1', () => {
     const redirect = `http://127.0.0.1:${server.address().port}`;
     const client = { client_id: config.googleClientId, client_secret: config.googleClientSecret, redirect_uri: redirect };
-    execFile('open', ['https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
-      client_id: client.client_id, redirect_uri: redirect, response_type: 'code', access_type: 'offline', prompt: 'consent', state,
+    const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+      client_id: client.client_id, redirect_uri: redirect, response_type: 'code', access_type: 'offline', prompt: 'select_account consent', state,
       scope: 'https://www.googleapis.com/auth/gmail.readonly',
-    })]);
+    });
+    execFile('open', [url]);
+    console.log(`If no browser opened, visit:\n${url}\n`);
     console.log('In the browser, sign in with the Gmail account the bot should read (e.g. the kid\'s school account)...');
     server.on('request', async (req, res) => {
       const q = new URL(req.url, redirect).searchParams;
