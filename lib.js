@@ -29,9 +29,11 @@ export const config = {
   mentionName: e.MENTION_NAME,
   mentionNumberEndsWith: e.MENTION_NUMBER_ENDS_WITH,
   model: e.MODEL || 'lmstudio-community/Qwen3.5-9B-MLX-4bit',
+  // How far back the very first run reads; later runs read everything since the last run.
+  emailLookbackDays: Number(e.EMAIL_LOOKBACK_DAYS || 14),
+  whatsappLookbackDays: Number(e.WHATSAPP_LOOKBACK_DAYS || 14),
   chromePath: e.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 };
-export const LOOKBACK_DAYS = 14; // first run only
 const MIN_CONFIDENCE = 0.5;
 const MAX_AHEAD_DAYS = 60;
 

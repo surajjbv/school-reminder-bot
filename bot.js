@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import {
   addDays, buildDigest, classroomPostUrl, config, driveLinks, ensureModel, extractTasks, isProcessed, istDate, istTime,
-  kvGet, kvSet, log, LOOKBACK_DAYS, markProcessed, openDb, releaseModel, requireConfig, markSent, saveTasks, tasksToSend, validateTasks,
+  kvGet, kvSet, log, markProcessed, openDb, releaseModel, requireConfig, markSent, saveTasks, tasksToSend, validateTasks,
 } from './lib.js';
 import { fetchSchoolMails, LoginExpired, openClassroom, openWhatsApp, WhatsAppLoggedOut } from './sources.js';
 
@@ -18,7 +18,7 @@ const loginAlert = () => ({
 });
 
 async function collectSchoolMail(db, today, alerts) {
-  const lastMs = Number(kvGet(db, 'gmail_last_ms') || Date.now() - LOOKBACK_DAYS * 864e5);
+  const lastMs = Number(kvGet(db, 'gmail_last_ms') || Date.now() - config.emailLookbackDays * 864e5);
   const mails = (await fetchSchoolMails(lastMs - 60000)).filter((m) => !isProcessed(db, `gmail:${m.id}`));
   log.info(`gmail: ${mails.length} new school mail(s)`);
 
@@ -81,7 +81,7 @@ async function collectSchoolMail(db, today, alerts) {
 }
 
 async function collectTeacherChat(db, wa) {
-  const since = Number(kvGet(db, 'wa_last_ts') || Math.floor(Date.now() / 1000) - LOOKBACK_DAYS * 86400);
+  const since = Number(kvGet(db, 'wa_last_ts') || Math.floor(Date.now() / 1000) - config.whatsappLookbackDays * 86400);
   const msgs = (await wa.readTeacherMessages(since)).filter((m) => !isProcessed(db, `wa:${m.id}`));
   log.info(`whatsapp: ${msgs.length} new message(s) from ${config.teacherChat}`);
   // One model call per day of messages, so captions and follow-ups keep their context.
