@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import * as XLSX from 'xlsx';
 import {
   buildDigest, classroomPostUrl, driveLinks, ensureModel, extractTasks, fileText, isDuplicate,
-  openDb, parseModelJson, releaseModel, saveTasks, sheetText, tasksForToday, validateTasks,
+  markSent, openDb, parseModelJson, releaseModel, saveTasks, sheetText, tasksToSend, validateTasks,
 } from './lib.js';
 
 const LIVE = process.env.LIVE === '1';
@@ -83,14 +83,19 @@ test('digest format, sorted by due date', () => {
   assert.equal(buildDigest([], today, '@Partner'), null);
 });
 
-test('reminds daily until the due date, then stops; unclear only until sent', () => {
+test('first message of the day: full list; later: only new; daily until due, then stops', () => {
   const db = openDb(':memory:');
   const t = { kid: 'Anu', action_line: 'Bring colour palette', due_date: '2026-09-29', date_unclear: 0, confidence: 1, source_id: 'x' };
   saveTasks(db, [t, { ...t, source_id: 'y' }, { kid: 'Ravi', action_line: 'Pay trip fee', due_date: null, date_unclear: 1, confidence: 1, source_id: 'z' }], today);
-  assert.equal(tasksForToday(db, today).length, 2); // duplicate dropped
-  db.prepare('UPDATE tasks SET unclear_sent = 1').run();
-  assert.equal(tasksForToday(db, '2026-09-29').length, 1); // due day itself
-  assert.equal(tasksForToday(db, '2026-09-30').length, 0); // after the due date
+  const morning = tasksToSend(db, today, false);
+  assert.equal(morning.length, 2); // duplicate dropped
+  markSent(db, morning, today);
+  assert.equal(tasksToSend(db, today, true).length, 0); // evening: nothing new
+  saveTasks(db, [{ ...t, action_line: 'Bring old newspaper', source_id: 'n' }], today);
+  assert.deepEqual(tasksToSend(db, today, true).map((x) => x.action_line), ['Bring old newspaper']); // evening: only the new one
+  assert.equal(tasksToSend(db, '2026-09-29', false).length, 2); // next morning: both still due, unclear one not repeated
+  assert.equal(tasksToSend(db, '2026-09-30', false).length, 0); // after the due date
+  assert.match(buildDigest(morning, today, '@P', true), /^@P New school tasks - Mon 28 Sep/);
 });
 
 // ── sources ──

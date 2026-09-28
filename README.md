@@ -44,13 +44,13 @@ cp .env.example .env      # fill in names, school account, chat and group names
 
 - **Model:** if `MODEL` is already loaded in LM Studio, the bot uses it and leaves it loaded. Otherwise it loads it for the run and unloads it afterwards, also on errors, Ctrl-C and kill signals. After a hard crash, the launcher, the scheduler, or the next run cleans up. To unload by hand, run `lms unload school-reminder-bot`.
 - **Reading:** images and PDFs (WhatsApp, email attachments, Drive) are read with macOS Vision OCR. Linked Google Sheets and Docs are re-checked for edits for 14 days, so if a teacher edits the weekly homework sheet, the new tasks are picked up.
+- **What gets sent:** the first message of the day lists everything still due. Any later run that day (for example at 8 pm, with `RUN_TIMES=10:00,20:00`) sends only tasks that were never sent before, or nothing if there's nothing new.
 - **Rules:**
   - The model must return valid JSON; the bot retries once, then skips that item.
   - Due dates must not be in the past and must be within 60 days.
   - Near-identical tasks are merged.
   - A task whose date is unclear is sent once, with "date unclear, check source".
   - Reminders go out daily until the due date.
-  - If there are no tasks, nothing is sent.
 - **Alerts:** if the school login expires, you get a WhatsApp message in your own "Message yourself" chat; run `npm run login:school`. If WhatsApp gets unlinked, you get a macOS notification; run `npm run login:whatsapp`.
 - **Logs:** `data/bot.log` has every step, failures as `run FAILED during [step]: reason` with the stack trace, and every sent message (`SENT` lines, with WhatsApp's message id).
 - **Security:**

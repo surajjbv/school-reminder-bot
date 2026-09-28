@@ -95,7 +95,7 @@ export function openDb(file = path.join(DATA, 'bot.db')) {
     CREATE TABLE IF NOT EXISTS docs (id TEXT PRIMARY KEY, kind TEXT, hash TEXT, first_seen TEXT);
     CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY, kid TEXT, action_line TEXT, due_date TEXT,
-      date_unclear INTEGER DEFAULT 0, unclear_sent INTEGER DEFAULT 0, confidence REAL, source_id TEXT, first_seen TEXT);
+      date_unclear INTEGER DEFAULT 0, last_sent TEXT, confidence REAL, source_id TEXT, first_seen TEXT);
     CREATE TABLE IF NOT EXISTS sent (id INTEGER PRIMARY KEY, day TEXT, slot TEXT, text TEXT, at TEXT);
   `);
   return db;
@@ -160,13 +160,23 @@ export function saveTasks(db, tasks, today) {
   return added;
 }
 
-/** Remind daily until the due date; tasks with an unclear date only until sent once. */
-export const tasksForToday = (db, today) => [
-  ...db.prepare('SELECT * FROM tasks WHERE date_unclear = 0 AND due_date >= ? AND first_seen <= ?').all(today, today),
-  ...db.prepare('SELECT * FROM tasks WHERE date_unclear = 1 AND unclear_sent = 0').all(),
-];
+/**
+ * What to send. First message of the day: everything still due (reminded daily until the due
+ * date; unclear-date tasks only once). Later the same day: only tasks never sent before.
+ */
+export function tasksToSend(db, today, newOnly) {
+  const due = [
+    ...db.prepare('SELECT * FROM tasks WHERE date_unclear = 0 AND due_date >= ? AND first_seen <= ?').all(today, today),
+    ...db.prepare('SELECT * FROM tasks WHERE date_unclear = 1 AND last_sent IS NULL').all(),
+  ];
+  return newOnly ? due.filter((t) => !t.last_sent) : due;
+}
+export function markSent(db, tasks, today) {
+  const update = db.prepare('UPDATE tasks SET last_sent = ? WHERE id = ?');
+  for (const t of tasks) update.run(today, t.id);
+}
 
-export function buildDigest(tasks, today, mention) {
+export function buildDigest(tasks, today, mention, newOnly = false) {
   if (!tasks.length) return null;
   const tomorrow = addDays(today, 1);
   const lines = [...tasks]
@@ -176,7 +186,7 @@ export function buildDigest(tasks, today, mention) {
       const tag = t.due_date === today ? ' (TODAY)' : t.due_date === tomorrow ? ' (TOMORROW)' : '';
       return `- ${t.kid}: ${t.action_line} - ${pretty(t.due_date)}${tag}`;
     });
-  return [`${mention} School - ${pretty(today)}`, ...lines].join('\n');
+  return [`${mention} ${newOnly ? 'New school tasks' : 'School'} - ${pretty(today)}`, ...lines].join('\n');
 }
 
 // ── text extraction ───────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import {
   addDays, buildDigest, classroomPostUrl, config, driveLinks, ensureModel, extractTasks, isProcessed, istDate, istTime,
-  kvGet, kvSet, log, LOOKBACK_DAYS, markProcessed, openDb, releaseModel, requireConfig, saveTasks, tasksForToday, validateTasks,
+  kvGet, kvSet, log, LOOKBACK_DAYS, markProcessed, openDb, releaseModel, requireConfig, markSent, saveTasks, tasksToSend, validateTasks,
 } from './lib.js';
 import { fetchSchoolMails, LoginExpired, openClassroom, openWhatsApp, WhatsAppLoggedOut } from './sources.js';
 
@@ -142,20 +142,21 @@ async function main() {
     chat.commit();
 
     log.step(4, "Building today's reminder");
-    const tasks = tasksForToday(db, today);
-    log.info(`${tasks.length} task(s) to remind about`);
+    const newOnly = !!db.prepare('SELECT 1 FROM sent WHERE day = ?').get(today); // already messaged today?
+    const tasks = tasksToSend(db, today, newOnly);
+    log.info(`${tasks.length} task(s) to send (${newOnly ? 'only new since the last message today' : 'first message today: full list'})`);
     if (tasks.length && !db.prepare('SELECT 1 FROM sent WHERE day = ? AND slot = ?').get(today, slot)) {
       const mention = await wa.mention();
-      const text = buildDigest(tasks, today, mention.token);
+      const text = buildDigest(tasks, today, mention.token, newOnly);
       log.step(5, `Sending to "${config.groupName}"`);
       log.box(`sending to "${config.groupName}"`, text.replace(mention.token, '@' + config.mentionName));
       await wa.sendToGroup(text, mention.id);
       db.prepare('INSERT INTO sent (day, slot, text, at) VALUES (?, ?, ?, ?)').run(today, slot, text, new Date().toISOString());
-      db.prepare('UPDATE tasks SET unclear_sent = 1 WHERE date_unclear = 1').run();
+      markSent(db, tasks, today);
       log.sent(`${config.groupName}: ${text.replace(/\n/g, ' | ')}`);
     } else {
       log.step(5, 'Nothing to send');
-      log.info(tasks.length ? `slot ${slot} already sent today` : 'no tasks today, nothing sent');
+      log.info(tasks.length ? `slot ${slot} already sent today` : newOnly ? 'nothing new since the last message' : 'no tasks today, nothing sent');
     }
 
     for (const a of alerts) {
