@@ -66,6 +66,7 @@ export const log = {
     console.log(`\n${paint('1;35', `[${n}/5]`)} ${paint('1', m)}`);
   },
   failed: (err) => write('ERROR', `run FAILED during ${step}: ${err?.message}\n${err?.stack || ''}`),
+  currentStep: () => step,
   box: (title, body) => console.log(`\n${paint('1;32', `── ${title} ──`)}\n${body}\n${paint('1;32', '─'.repeat(title.length + 6))}`),
 };
 
@@ -200,10 +201,20 @@ export function fileText(file) {
   return execFileSync(OCR_BIN, [file], { encoding: 'utf8', timeout: 120000 }).trim();
 }
 
-/** Every tab of a workbook as CSV, skipping empty rows. */
+// Latest date in a tab name like "210926- 250926" or "15/09/26 - 18/09/26" (as YYMMDD), or 0.
+function tabDate(name) {
+  const dates = [...name.matchAll(/(\d{1,2})[./-]?(\d{2})[./-]?(\d{2}|\d{4})(?!\d)/g)]
+    .map(([, d, m, y]) => Number(y.slice(-2)) * 1e4 + Number(m) * 100 + Number(d))
+    .filter((v) => v % 100 >= 1 && v % 100 <= 31 && Math.floor(v / 100) % 100 >= 1 && Math.floor(v / 100) % 100 <= 12);
+  return dates.length ? Math.max(...dates) : 0;
+}
+
+/** The 3 most recent tabs of a workbook as CSV (by date in the tab name, else the first 3), skipping empty rows. */
 export function sheetText(buf) {
   const wb = XLSX.read(buf, { type: 'buffer', cellDates: true });
-  return wb.SheetNames.map((name) => {
+  const dated = wb.SheetNames.every(tabDate);
+  const tabs = dated ? [...wb.SheetNames].sort((a, b) => tabDate(b) - tabDate(a)) : wb.SheetNames;
+  return tabs.slice(0, 3).map((name) => {
     const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], { blankrows: false, dateNF: 'yyyy-mm-dd' });
     return `## Tab: ${name}\n${csv.split('\n').filter((l) => l.replace(/,/g, '').trim()).join('\n')}`;
   }).join('\n\n');

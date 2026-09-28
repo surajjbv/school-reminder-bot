@@ -11,7 +11,7 @@ import { openClassroom, openWhatsApp, PROFILE } from './sources.js';
 const what = process.argv[2];
 
 if (what === 'google') {
-  // Read-only Gmail access for YOUR account; the refresh token is saved into .env.
+  // Read-only Gmail access for the account whose mail the bot reads; the refresh token is saved into .env.
   requireConfig('googleClientId', 'googleClientSecret');
   const state = crypto.randomBytes(16).toString('hex');
   const server = http.createServer().listen(0, '127.0.0.1', () => {
@@ -21,7 +21,7 @@ if (what === 'google') {
       client_id: client.client_id, redirect_uri: redirect, response_type: 'code', access_type: 'offline', prompt: 'consent', state,
       scope: 'https://www.googleapis.com/auth/gmail.readonly',
     })]);
-    console.log('Sign in with YOUR Gmail (the one receiving the school mail) in the browser...');
+    console.log('In the browser, sign in with the Gmail account the bot should read (e.g. the kid\'s school account)...');
     server.on('request', async (req, res) => {
       const q = new URL(req.url, redirect).searchParams;
       if (!q.get('code') || q.get('state') !== state) return res.end('Waiting...');

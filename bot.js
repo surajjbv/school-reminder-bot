@@ -165,6 +165,13 @@ async function main() {
       kvSet(db, `alert:${a.key}`, today);
       log.warn(`alert sent to self: ${a.key}`);
     }
+  } catch (err) {
+    // Tell the user without them having to read logs: WhatsApp to self, else a macOS notification.
+    const text = `School reminder bot FAILED during ${log.currentStep()}: ${err.message}. Details: data/bot.log`;
+    try { await wa.sendToSelf(text); } catch {
+      try { execFileSync('osascript', ['-e', `display notification ${JSON.stringify(err.message)} with title "School reminder bot failed"`]); } catch { /* no GUI */ }
+    }
+    throw err;
   } finally {
     await (wa ?? (await waStarting))?.close?.();
     db.close();
