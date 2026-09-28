@@ -62,14 +62,15 @@ test('validation: past, too far, unclear, low confidence, long lines', () => {
 });
 
 test('a date the message does not state is dropped (task kept as undetermined)', () => {
-  const sourceText = 'The time slot allotted for you is 2:15 PM. Report 30 mins prior. Homework due 29/09/26.';
+  const sourceText = 'The time slot allotted for you is 2:15 PM. Report 30 mins prior. Homework due 29/09/26. Wheat flour 17/08.';
   const { ok } = validateTasks([
     { action_line: 'Report 30 mins before 2:15 PM slot', due_date: '2026-10-05', date_source: null, confidence: 1 },
     { action_line: 'Report early', due_date: '2026-10-05', date_source: '5th October', confidence: 1 },
     { action_line: 'Report at check-in', due_date: '2026-09-28', date_source: '30 mins prior', confidence: 1 },
+    { action_line: 'Bring wheat flour', due_date: '2026-10-17', date_source: '17/08', confidence: 1 },
     { action_line: 'Submit homework', due_date: '2026-09-29', date_source: 'due 29/09/26', confidence: 1 },
   ], { kid: 'Anu', sourceId: 'x', today, sourceText });
-  assert.deepEqual(ok.map((t) => t.due_date), [null, null, null, '2026-09-29']);
+  assert.deepEqual(ok.map((t) => t.due_date), [null, null, null, null, '2026-09-29']);
 });
 
 test('dedupes near-identical tasks', () => {

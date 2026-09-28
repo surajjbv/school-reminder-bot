@@ -130,7 +130,24 @@ function shorten(line) {
 const norm = (s) => String(s).toLowerCase().replace(/[*_]/g, '').replace(/\s+/g, ' ').trim(); // ignore email bold/italic marks
 // Must look like a date or day: 29/09, 2026-10-01, 2nd October, Oct 2, Friday, tomorrow, next week.
 const DATE_WORDS = /\d{1,4}[/.-]\d{1,2}|\b\d{1,2}(st|nd|rd|th)?\s*(of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b|\b(mon|tues?|wed(nes)?|thu(rs)?|fri|sat(ur)?|sun)(day)?\b|\b(today|tonight|tomorrow|next week)\b/i;
-const dateIsInSource = (quote, source) => !!quote && DATE_WORDS.test(quote) && norm(source).includes(norm(quote));
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+// If the quote spells out a day and month (29/09, 2026-10-01, 2nd October, Oct 2), they must match the due date.
+function quoteMatches(quote, due) {
+  const [, m, d] = due.split('-').map(Number);
+  const q = quote.toLowerCase();
+  const iso = q.match(/\b\d{4}-(\d{1,2})-(\d{1,2})\b/);
+  if (iso) return +iso[1] === m && +iso[2] === d;
+  const dm = q.match(/\b(\d{1,2})[/.-](\d{1,2})\b/);
+  if (dm) return +dm[1] === d && +dm[2] === m;
+  const named = q.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?([a-z]{3})/) || q.match(/\b([a-z]{3})[a-z]*\.?\s+(\d{1,2})\b/);
+  if (named) {
+    const [day, mon] = /\d/.test(named[1]) ? [named[1], named[2]] : [named[2], named[1]];
+    if (MONTHS.includes(mon)) return +day === d && MONTHS.indexOf(mon) + 1 === m;
+  }
+  return true; // relative ("tomorrow", "Friday"): can't be checked mechanically
+}
+const dateIsInSource = (quote, source, due) =>
+  !!quote && DATE_WORDS.test(quote) && norm(source).includes(norm(quote)) && quoteMatches(quote, due);
 
 /** Clean model tasks, or drop them with a reason. Kid and source come from the source, not the model. */
 export function validateTasks(raw, { kid, sourceId, today, sourceText = '' }) {
@@ -143,7 +160,7 @@ export function validateTasks(raw, { kid, sourceId, today, sourceText = '' }) {
     if (conf < MIN_CONFIDENCE) { dropped.push({ t, why: `low confidence ${conf}` }); continue; }
     if (/\b(otp|one[- ]time|password|verification code)\b/i.test(line)) { dropped.push({ t, why: 'mentions a login/OTP code' }); continue; }
     let due = t?.due_date;
-    if (isValidYmd(due) && sourceText && !dateIsInSource(t?.date_source, sourceText)) {
+    if (isValidYmd(due) && sourceText && !dateIsInSource(t?.date_source, sourceText, due)) {
       dropped.push({ t, why: `date ${due} not stated in the message (quote: ${JSON.stringify(t?.date_source ?? null)}), kept as undetermined` });
       due = null;
     }
