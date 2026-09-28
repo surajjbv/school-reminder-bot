@@ -211,11 +211,11 @@ function tabDate(name) {
   return dates.length ? Math.max(...dates) : 0;
 }
 
-/** The 3 most recent tabs of a workbook as CSV (by date in the tab name, else the first 3), skipping empty rows. */
+/** The 3 most recent tabs of a workbook as CSV (newest dates in tab names; if none are dated, the first 3), skipping empty rows. */
 export function sheetText(buf) {
   const wb = XLSX.read(buf, { type: 'buffer', cellDates: true });
-  const dated = wb.SheetNames.every(tabDate);
-  const tabs = dated ? [...wb.SheetNames].sort((a, b) => tabDate(b) - tabDate(a)) : wb.SheetNames;
+  const dated = wb.SheetNames.filter(tabDate).sort((a, b) => tabDate(b) - tabDate(a));
+  const tabs = dated.length ? dated : wb.SheetNames;
   return tabs.slice(0, 3).map((name) => {
     const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], { blankrows: false, dateNF: 'yyyy-mm-dd' });
     return `## Tab: ${name}\n${csv.split('\n').filter((l) => l.replace(/,/g, '').trim()).join('\n')}`;

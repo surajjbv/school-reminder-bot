@@ -55,14 +55,14 @@ async function collectSchool(db, today) {
   ]);
 
   // Sheets/Docs get edited in place (e.g. the weekly homework Sheet): re-read recent ones only if they changed.
+  // An edit counts as handled only once extracted, so a failed extraction is retried next run.
   for (const w of db.prepare('SELECT * FROM watched WHERE first_seen >= ?').all(addDays(today, -WATCH_DAYS))) {
     if (cache.has(w.id)) continue;
     const modified = await driveModified(w.id).catch(() => w.modified);
-    if (modified === w.modified) continue;
+    const editId = `drive:${w.id}:${modified}`;
+    if (modified === w.modified || isProcessed(db, editId)) continue;
     const f = await read(w.id);
-    if (!f) continue;
-    remember.run(w.id, f.modified, w.id, today);
-    items.push({ sourceId: `drive:${w.id}:${f.modified}`, kid: config.emailKid, kind: 'edited school document', date: today, text: `[${f.name}]\n${f.text}`, markIds: [] });
+    if (f) items.push({ sourceId: editId, kid: config.emailKid, kind: 'edited school document', date: today, text: `[${f.name}]\n${f.text}`, markIds: [editId] });
   }
 
   const newest = (list, fallback) => Math.max(fallback, ...list.map((x) => x.ms));
@@ -74,7 +74,8 @@ async function collectSchool(db, today) {
 
 async function collectTeacherChat(db, wa) {
   const since = Number(kvGet(db, 'wa_last_ts') || Math.floor(Date.now() / 1000) - config.whatsappLookbackDays * 86400);
-  const msgs = (await wa.readTeacherMessages(since)).filter((m) => !isProcessed(db, `wa:${m.id}`));
+  // Look behind the marker too, so a day whose extraction failed is retried (processed messages are skipped).
+  const msgs = (await wa.readTeacherMessages(since - RETRY_WINDOW / 1000)).filter((m) => !isProcessed(db, `wa:${m.id}`));
   log.info(`whatsapp: ${msgs.length} new message(s) from ${config.teacherChat}`);
   // One model call per day of messages, so captions and follow-ups keep their context.
   const byDay = Map.groupBy(msgs, (m) => istDate(m.ts * 1000));
@@ -83,7 +84,7 @@ async function collectTeacherChat(db, wa) {
     text: ms.map((m) => `[${istTime(m.ts * 1000)}] ${m.text}`).join('\n\n'),
     markIds: ms.map((m) => `wa:${m.id}`),
   }));
-  const newest = msgs.length ? Math.max(...msgs.map((m) => m.ts)) : since;
+  const newest = Math.max(since, ...msgs.map((m) => m.ts));
   return { items, commit: () => kvSet(db, 'wa_last_ts', newest) };
 }
 

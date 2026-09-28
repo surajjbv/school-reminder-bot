@@ -109,7 +109,7 @@ test('email: finds Drive links', () => {
 
 test('sheet: only the 3 most recent tabs (by date in the tab name)', () => {
   const wb = XLSX.utils.book_new();
-  for (const name of ['080926- 110926', '210926- 250926', '010926- 050926', '150926- 180926']) {
+  for (const name of ['Instructions', '080926- 110926', '210926- 250926', '010926- 050926', '150926- 180926']) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Week', name]]), name);
   }
   const text = sheetText(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));

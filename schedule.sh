@@ -51,6 +51,7 @@ key="data/state/${today}_${slot/:/}"
 [ -e "$key.done" ] && exit 0
 tries=$(cat "$key.tries" 2>/dev/null || echo 0)
 [ "$tries" -ge 3 ] && exit 0            # give up on this slot after 3 failed attempts
+find data/state -maxdepth 1 -name lock -mmin +30 -exec rmdir {} \; 2>/dev/null  # left by a crash or power loss
 mkdir data/state/lock 2>/dev/null || exit 0
 trap 'rmdir data/state/lock; "$HOME/.lmstudio/bin/lms" unload school-reminder-bot >/dev/null 2>&1' EXIT
 echo $(( tries + 1 )) > "$key.tries"
