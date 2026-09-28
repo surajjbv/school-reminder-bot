@@ -117,8 +117,23 @@ export function parseModelJson(text) {
   return obj.tasks;
 }
 
+// Max 12 words; if cut, don't end on a dangling number or small word ("...ID card 30").
+function shorten(line) {
+  const w = line.split(' ');
+  if (w.length <= 12) return line;
+  const cut = w.slice(0, 12);
+  while (cut.length > 1 && /^(\d+|and|or|to|for|with|by|of|the|a|an|in|on|at|before|after|from)$/i.test(cut.at(-1))) cut.pop();
+  return cut.join(' ');
+}
+
+// A due date is kept only if the model quotes the words that state it, and they really are in the message.
+const norm = (s) => String(s).toLowerCase().replace(/[*_]/g, '').replace(/\s+/g, ' ').trim(); // ignore email bold/italic marks
+// Must look like a date or day: 29/09, 2026-10-01, 2nd October, Oct 2, Friday, tomorrow, next week.
+const DATE_WORDS = /\d{1,4}[/.-]\d{1,2}|\b\d{1,2}(st|nd|rd|th)?\s*(of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b|\b(mon|tues?|wed(nes)?|thu(rs)?|fri|sat(ur)?|sun)(day)?\b|\b(today|tonight|tomorrow|next week)\b/i;
+const dateIsInSource = (quote, source) => !!quote && DATE_WORDS.test(quote) && norm(source).includes(norm(quote));
+
 /** Clean model tasks, or drop them with a reason. Kid and source come from the source, not the model. */
-export function validateTasks(raw, { kid, sourceId, today }) {
+export function validateTasks(raw, { kid, sourceId, today, sourceText = '' }) {
   const ok = [];
   const dropped = [];
   for (const t of raw) {
@@ -128,10 +143,14 @@ export function validateTasks(raw, { kid, sourceId, today }) {
     if (conf < MIN_CONFIDENCE) { dropped.push({ t, why: `low confidence ${conf}` }); continue; }
     if (/\b(otp|one[- ]time|password|verification code)\b/i.test(line)) { dropped.push({ t, why: 'mentions a login/OTP code' }); continue; }
     let due = t?.due_date;
+    if (isValidYmd(due) && sourceText && !dateIsInSource(t?.date_source, sourceText)) {
+      dropped.push({ t, why: `date ${due} not stated in the message (quote: ${JSON.stringify(t?.date_source ?? null)}), kept as undetermined` });
+      due = null;
+    }
     if (!isValidYmd(due)) due = null;
     else if (due < today) { dropped.push({ t, why: `due date ${due} is past` }); continue; }
     else if (daysBetween(today, due) > MAX_AHEAD_DAYS) { dropped.push({ t, why: `due date ${due} over ${MAX_AHEAD_DAYS} days away` }); continue; }
-    ok.push({ kid, action_line: line.split(' ').slice(0, 12).join(' '), due_date: due, date_unclear: due ? 0 : 1, confidence: conf, source_id: sourceId });
+    ok.push({ kid, action_line: shorten(line), due_date: due, date_unclear: due ? 0 : 1, confidence: conf, source_id: sourceId });
   }
   return { ok, dropped };
 }
@@ -187,7 +206,7 @@ export function buildDigest(tasks, today, mention, newOnly = false) {
   const lines = [...tasks]
     .sort((a, b) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999') || a.kid.localeCompare(b.kid))
     .map((t) => {
-      if (!t.due_date) return `- ${t.kid}: ${t.action_line} - date unclear, check source`;
+      if (!t.due_date) return `- ${t.kid}: ${t.action_line} - date undetermined`;
       const tag = t.due_date === today ? ' (TODAY)' : t.due_date === tomorrow ? ' (TOMORROW)' : '';
       return `- ${t.kid}: ${t.action_line} - ${pretty(t.due_date)}${tag}`;
     });
@@ -278,10 +297,10 @@ export function releaseModel() {
 process.on('exit', releaseModel);
 
 const SYSTEM = `You extract action items for a parent from school messages (emails, class announcements, spreadsheets, teacher WhatsApp messages, OCR text of notices).
-Return ONLY JSON: {"tasks":[{"action_line":"...","due_date":"YYYY-MM-DD or null","confidence":0.0-1.0}]}
+Return ONLY JSON: {"tasks":[{"action_line":"...","due_date":"YYYY-MM-DD or null","date_source":"exact words from the message that state the date, or null","confidence":0.0-1.0}]}
 Rules:
-- action_line: starts with a verb, max 12 words, concrete, no dates in it. Use only what the message says; never invent tasks.
-- Only things the parent/child must DO or BRING, or dated events to attend. Ignore circulars with no action, recaps of past events, promotions, greetings.
+- action_line: starts with a verb, max 12 words, concrete, no dates in it (keep a specific time like "2:15 PM"). Use only what the message says; never invent tasks.
+- Only things the parent/child must DO or BRING, or dated events to attend. Invitations to school events or competitions the child can join count (e.g. register/attend). Ignore circulars with no action, recaps of past events, greetings.
 - "View/see/access/check the attachment, picture, folder, link or timetable" is NOT a task.
 - Lines like "Completed pg 10", "Introduction of ...", "Reinforcement of ..." describe class work already done: they are NOT tasks. In weekly-update sheets, tasks are under "Practice work"/"Submission Dates" and "Requirements".
 - Ignore OTP / verification-code / password emails completely, and never put any code or password in action_line.
@@ -289,7 +308,7 @@ Rules:
 - Skip tasks whose due date is before Today (e.g. older weeks in a homework sheet).
 - For deadlines ("fill form by 18th") use that deadline as due_date.
 - Registration/sign-up for an event with no stated deadline: due_date is the event date. Merge "register" and "attend" for the same event into one task.
-- If a task clearly exists but its date is unknown, set due_date to null.
+- NEVER guess a date. due_date only if the message itself states the date or day for that task; copy those exact words into date_source. Otherwise due_date and date_source are null.
 - One task per distinct action, at most 10, most important first. No tasks -> {"tasks":[]}.`;
 
 async function complete(messages) {

@@ -51,13 +51,25 @@ test('validation: past, too far, unclear, low confidence, long lines', () => {
     { action_line: 'Far thing', due_date: '2026-12-31', confidence: 0.9 },
     { action_line: 'Send fee receipt', due_date: null, confidence: 0.8 },
     { action_line: 'Maybe something', due_date: '2026-09-30', confidence: 0.2 },
-    { action_line: 'one two three four five six seven eight nine ten eleven twelve thirteen', due_date: '2026-09-30', confidence: 1 },
+    { action_line: 'one two three four five six seven eight nine ten eleven twelve thirteen', due_date: '2026-09-30', confidence: 1, date_source: '30/09' },
+    { action_line: 'Report to check-in counter with QR code and school ID card 30 mins before slot', due_date: null, confidence: 1 },
   ], { kid: 'Anu', sourceId: 'gmail:1', today });
-  assert.deepEqual(ok.map((t) => t.action_line), ['Bring colour palette', 'Send fee receipt', 'one two three four five six seven eight nine ten eleven twelve']);
+  assert.deepEqual(ok.map((t) => t.action_line), ['Bring colour palette', 'Send fee receipt', 'one two three four five six seven eight nine ten eleven twelve', 'Report to check-in counter with QR code and school ID card']);
   assert.equal(ok[1].date_unclear, 1);
   assert.equal(ok[0].kid, 'Anu');
   assert.equal(dropped.length, 3);
   assert.equal(validateTasks([{ action_line: 'Submit registration with OTP 5931', due_date: '2026-09-29', confidence: 1 }], { kid: 'Anu', sourceId: 'x', today }).ok.length, 0);
+});
+
+test('a date the message does not state is dropped (task kept as undetermined)', () => {
+  const sourceText = 'The time slot allotted for you is 2:15 PM. Report 30 mins prior. Homework due 29/09/26.';
+  const { ok } = validateTasks([
+    { action_line: 'Report 30 mins before 2:15 PM slot', due_date: '2026-10-05', date_source: null, confidence: 1 },
+    { action_line: 'Report early', due_date: '2026-10-05', date_source: '5th October', confidence: 1 },
+    { action_line: 'Report at check-in', due_date: '2026-09-28', date_source: '30 mins prior', confidence: 1 },
+    { action_line: 'Submit homework', due_date: '2026-09-29', date_source: 'due 29/09/26', confidence: 1 },
+  ], { kid: 'Anu', sourceId: 'x', today, sourceText });
+  assert.deepEqual(ok.map((t) => t.due_date), [null, null, null, '2026-09-29']);
 });
 
 test('dedupes near-identical tasks', () => {
@@ -82,7 +94,7 @@ test('digest format, sorted by due date', () => {
     '- Anu: Wear yellow dress - Mon 28 Sep (TODAY)',
     '- Anu: Bring colour palette - Tue 29 Sep (TOMORROW)',
     '- Ravi: Homework pg 12 - Wed 30 Sep',
-    '- Ravi: Pay trip fee - date unclear, check source',
+    '- Ravi: Pay trip fee - date undetermined',
   ].join('\n'));
   assert.equal(buildDigest([], today, '@Partner'), null);
 });
