@@ -80,7 +80,7 @@ export function addDays(ymd, n) {
 const daysBetween = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5);
 const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-export function pretty(ymd) { // 'Tue 29 Sep'
+function pretty(ymd) { // 'Tue 29 Sep'
   const d = new Date(ymd + 'T00:00:00Z');
   return `${WD[d.getUTCDay()]} ${d.getUTCDate()} ${MON[d.getUTCMonth()]}`;
 }
@@ -244,7 +244,7 @@ export function driveLinks(text) {
 // Reuses the model if it's already loaded (and leaves it loaded); otherwise loads it,
 // and unloads it on exit, including on errors and Ctrl-C.
 const LMS = path.join(os.homedir(), '.lmstudio/bin/lms');
-export const MODEL_ID = 'school-reminder-bot';
+const MODEL_ID = 'school-reminder-bot';
 const lms = async (...a) => (await promisify(execFile)(LMS, a, { encoding: 'utf8' })).stdout;
 let model = null; // { id, owned, startedServer }
 
