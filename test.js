@@ -57,6 +57,7 @@ test('validation: past, too far, unclear, low confidence, long lines', () => {
   assert.equal(ok[1].date_unclear, 1);
   assert.equal(ok[0].kid, 'Anu');
   assert.equal(dropped.length, 3);
+  assert.equal(validateTasks([{ action_line: 'Submit registration with OTP 5931', due_date: '2026-09-29', confidence: 1 }], { kid: 'Anu', sourceId: 'x', today }).ok.length, 0);
 });
 
 test('dedupes near-identical tasks', () => {
@@ -65,6 +66,9 @@ test('dedupes near-identical tasks', () => {
   assert.ok(!isDuplicate({ ...a, kid: 'Ravi' }, [a]));
   assert.ok(!isDuplicate({ ...a, due_date: '2026-09-30' }, [a]));
   assert.ok(!isDuplicate({ ...a, action_line: 'Finish Maths homework pg 12' }, [a]));
+  assert.ok(isDuplicate({ ...a, action_line: 'Bring colour palette by 29/09/26' }, [a])); // dates/filler ignored
+  const c = { ...a, action_line: "Write Cursive 'c' and 'a' in four line notebook" };
+  assert.ok(isDuplicate({ ...a, action_line: "Complete Cursive 'c' and 'a' in notebook by 29/09/26" }, [c]));
 });
 
 test('digest format, sorted by due date', () => {

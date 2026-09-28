@@ -34,7 +34,7 @@ npm install
 cp .env.example .env      # fill in names, school account, chat and group names
 ```
 
-1. **Google (your Gmail, read-only).** At https://console.cloud.google.com, create a project and enable the **Gmail API**. On the **OAuth consent screen**, choose External, fill in the app name and your email, then under **Audience** click **Publish app** (apps left in "Testing" lose access after 7 days). Under **Credentials**, create an **OAuth client ID** of type **Desktop app**, and put its ID and secret in `.env`. Then run `npm run login:google` and allow access (on the "unverified app" warning, click **Advanced** and continue).
+1. **Google (the kid's school Gmail, read-only).** At https://console.cloud.google.com, create a project and enable the **Gmail API**. On the **OAuth consent screen**, choose External, fill in the app name and your email, then under **Audience** click **Publish app** (apps left in "Testing" lose access after 7 days). Under **Credentials**, create an **OAuth client ID** of type **Desktop app**, and put its ID and secret in `.env`. Then run `npm run login:google`, choose the **kid's school account**, and allow read-only access (on the "unverified app" warning, click **Advanced** and continue).
 2. **School account.** Run `npm run login:school`. A Chrome window opens; sign in, let Chrome save the password, then quit it with **Cmd+Q**.
 3. **WhatsApp.** Run `npm run login:whatsapp`, then scan the QR code with WhatsApp (**Settings**, **Linked devices**, **Link a device**).
 4. **Run it.** Run `npm start`, or double-click `run-now.command`.

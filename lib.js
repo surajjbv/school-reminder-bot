@@ -127,6 +127,7 @@ export function validateTasks(raw, { kid, sourceId, today }) {
     const conf = Number(t?.confidence ?? 0);
     if (!line) { dropped.push({ t, why: 'empty action_line' }); continue; }
     if (conf < MIN_CONFIDENCE) { dropped.push({ t, why: `low confidence ${conf}` }); continue; }
+    if (/\b(otp|one[- ]time|password|verification code)\b/i.test(line)) { dropped.push({ t, why: 'mentions a login/OTP code' }); continue; }
     let due = t?.due_date;
     if (!isValidYmd(due)) due = null;
     else if (due < today) { dropped.push({ t, why: `due date ${due} is past` }); continue; }
@@ -136,15 +137,17 @@ export function validateTasks(raw, { kid, sourceId, today }) {
   return { ok, dropped };
 }
 
-const STOP = new Set(['the', 'a', 'an', 'to', 'for', 'and', 'of', 'on', 'in', 'your', 'child', 'school', 'please', 'kindly']);
-const words = (s) => new Set(s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w)));
+const STOP = new Set(['the', 'an', 'to', 'for', 'and', 'of', 'on', 'in', 'by', 'before', 'with', 'your', 'child', 'school', 'please', 'kindly']);
+// Words that matter for comparing tasks: no numbers/dates, no filler.
+const words = (s) => new Set(s.toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w)));
 function similar(a, b) {
   const A = words(a);
   const B = words(b);
   if (!A.size || !B.size) return a.toLowerCase() === b.toLowerCase();
   let inter = 0;
   for (const w of A) if (B.has(w)) inter++;
-  return inter / (A.size + B.size - inter) >= 0.6;
+  // Mostly the same words, or the shorter wording is (almost) contained in the longer one.
+  return inter / (A.size + B.size - inter) >= 0.6 || inter / Math.min(A.size, B.size) >= 0.8;
 }
 // Same kid, same (or both unclear) date, near-identical wording.
 export const isDuplicate = (t, existing) =>
@@ -291,6 +294,7 @@ Return ONLY JSON: {"tasks":[{"kid":"<given kid>","action_line":"...","due_date":
 Rules:
 - action_line: imperative, max 12 words, concrete (e.g. "Bring colour palette", "Finish Maths homework pg 12", "Register for Navarathri performance").
 - Only things the parent/child must DO or BRING, or dated events to attend. Ignore circulars with no action, recaps of past events, promotions, greetings.
+- Ignore OTP / verification-code / password emails completely, and never put any code or password in action_line.
 - Resolve relative dates ("tomorrow", "Monday", "29/09") against the message date. Dates are Indian format (DD/MM). Timezone IST.
 - For deadlines ("fill form by 18th") use that deadline as due_date.
 - Registration/sign-up for an event with no stated deadline: due_date is the event date. Merge "register" and "attend" for the same event into one task.
