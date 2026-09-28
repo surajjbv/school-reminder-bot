@@ -8,15 +8,12 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "postinstall": "swiftc -O native/extract.swift -o bin/extract",
-    "start": "node --disable-warning=ExperimentalWarning src/index.js",
-    "dry-run": "node --disable-warning=ExperimentalWarning src/index.js --dry-run",
-    "login:google": "node scripts/google-auth.js",
-    "login:school": "node --disable-warning=ExperimentalWarning scripts/school-login.js",
-    "login:whatsapp": "node --disable-warning=ExperimentalWarning scripts/whatsapp-login.js",
-    "install:launchd": "bash bin/install-launchd.sh",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
-    "unload-model": "~/.lmstudio/bin/lms unload school-reminder-bot"
+    "start": "node --disable-warning=ExperimentalWarning bot.js",
+    "login:google": "node --disable-warning=ExperimentalWarning login.js google",
+    "login:school": "node --disable-warning=ExperimentalWarning login.js school",
+    "login:whatsapp": "node --disable-warning=ExperimentalWarning login.js whatsapp",
+    "schedule": "bash schedule.sh install",
+    "test": "node --disable-warning=ExperimentalWarning --test test.js"
   },
   "dependencies": {
     "puppeteer": "^24.38.0",
@@ -24,5 +21,9 @@
     "whatsapp-web.js": "github:wwebjs/whatsapp-web.js#58ddf1561cd783d6a548fa812eb70a05944604b4",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "main": "bot.js",
+  "puppeteer": {
+    "skipDownload": true
+  }
 }

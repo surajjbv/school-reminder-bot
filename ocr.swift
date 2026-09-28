@@ -1,5 +1,5 @@
 // Text from an image (Vision OCR) or a PDF (text layer, OCR for scanned pages).
-// Usage: extract <file>
+// Usage: ocr <file>   (built automatically into data/ocr on first use)
 import Foundation
 import PDFKit
 import Vision
@@ -27,7 +27,7 @@ func render(_ page: PDFPage) -> CGImage? {
 }
 
 let args = CommandLine.arguments
-guard args.count == 2 else { FileHandle.standardError.write("usage: extract <file>\n".data(using: .utf8)!); exit(2) }
+guard args.count == 2 else { FileHandle.standardError.write("usage: ocr <file>\n".data(using: .utf8)!); exit(2) }
 let url = URL(fileURLWithPath: args[1])
 
 if url.pathExtension.lowercased() == "pdf", let pdf = PDFDocument(url: url) {

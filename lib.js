@@ -1,0 +1,304 @@
+// Shared helpers: config, logging, dates, storage, task rules, text extraction, local model.
+import { execFile, execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import * as XLSX from 'xlsx';
+
+// ── config ────────────────────────────────────────────────────────────────
+export const ROOT = path.dirname(fileURLToPath(import.meta.url));
+export const DATA = path.join(ROOT, 'data');
+fs.mkdirSync(DATA, { recursive: true });
+if (fs.existsSync(path.join(ROOT, '.env'))) process.loadEnvFile(path.join(ROOT, '.env'));
+
+const e = process.env;
+export const config = {
+  googleClientId: e.GOOGLE_CLIENT_ID,
+  googleClientSecret: e.GOOGLE_CLIENT_SECRET,
+  googleRefreshToken: e.GOOGLE_REFRESH_TOKEN,
+  emailKid: e.EMAIL_KID_NAME,
+  schoolAccount: e.SCHOOL_ACCOUNT_EMAIL,
+  schoolQuery: e.SCHOOL_GMAIL_QUERY || `to:${e.SCHOOL_ACCOUNT_EMAIL}`,
+  chatKid: e.CHAT_KID_NAME,
+  teacherChat: e.TEACHER_CHAT_NAME,
+  groupName: e.GROUP_NAME,
+  mentionName: e.MENTION_NAME,
+  mentionNumberEndsWith: e.MENTION_NUMBER_ENDS_WITH,
+  model: e.MODEL || 'lmstudio-community/Qwen3.5-9B-MLX-4bit',
+  chromePath: e.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+};
+export const LOOKBACK_DAYS = 14; // first run only
+const MIN_CONFIDENCE = 0.5;
+const MAX_AHEAD_DAYS = 60;
+
+export function requireConfig(...keys) {
+  const missing = keys.filter((k) => !config[k]);
+  if (missing.length) throw new Error(`Missing in .env: ${missing.join(', ')} (see .env.example)`);
+}
+
+// ── logging (data/bot.log; tests use data/test.log) ───────────────────────
+const LOG = path.join(DATA, process.env.NODE_TEST_CONTEXT ? 'test.log' : 'bot.log');
+try { if (fs.statSync(LOG).size > 2e6) fs.renameSync(LOG, LOG + '.1'); } catch { /* no log yet */ }
+const tty = process.stdout.isTTY && !process.env.NO_COLOR;
+const paint = (c, s) => (tty ? `\x1b[${c}m${s}\x1b[0m` : s);
+const STYLE = { INFO: '36', WARN: '33', ERROR: '1;31', SENT: '1;32' };
+let step = 'startup';
+
+// Callers must never pass secrets.
+function write(level, msg) {
+  fs.appendFileSync(LOG, `${new Date().toISOString()} ${level} ${msg}\n`);
+  console.log(`${paint('2', new Date().toLocaleTimeString('en-GB', { hour12: false }))} ${paint(STYLE[level], level.padEnd(5))} ${msg}`);
+}
+export const log = {
+  info: (m) => write('INFO', m),
+  warn: (m) => write('WARN', m),
+  error: (m) => write('ERROR', m),
+  sent: (m) => write('SENT', m),
+  step: (n, m) => {
+    step = `[${n}/5] ${m}`;
+    fs.appendFileSync(LOG, `${new Date().toISOString()} STEP  ${step}\n`);
+    console.log(`\n${paint('1;35', `[${n}/5]`)} ${paint('1', m)}`);
+  },
+  failed: (err) => write('ERROR', `run FAILED during ${step}: ${err?.message}\n${err?.stack || ''}`),
+  box: (title, body) => console.log(`\n${paint('1;32', `── ${title} ──`)}\n${body}\n${paint('1;32', '─'.repeat(title.length + 6))}`),
+};
+
+// ── dates (IST calendar days, 'YYYY-MM-DD') ───────────────────────────────
+const TZ = 'Asia/Kolkata';
+export const istDate = (d = new Date()) => new Date(d).toLocaleDateString('en-CA', { timeZone: TZ });
+export const istTime = (d = new Date()) => new Date(d).toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
+export function addDays(ymd, n) {
+  const d = new Date(ymd + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+const daysBetween = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5);
+const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+export function pretty(ymd) { // 'Tue 29 Sep'
+  const d = new Date(ymd + 'T00:00:00Z');
+  return `${WD[d.getUTCDay()]} ${d.getUTCDate()} ${MON[d.getUTCMonth()]}`;
+}
+const isValidYmd = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && new Date(s + 'T00:00:00Z').toISOString().slice(0, 10) === s;
+
+// ── storage ───────────────────────────────────────────────────────────────
+export function openDb(file = path.join(DATA, 'bot.db')) {
+  const db = new DatabaseSync(file);
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+    CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+    CREATE TABLE IF NOT EXISTS processed (source_id TEXT PRIMARY KEY, at TEXT);
+    CREATE TABLE IF NOT EXISTS docs (id TEXT PRIMARY KEY, kind TEXT, hash TEXT, first_seen TEXT);
+    CREATE TABLE IF NOT EXISTS tasks (
+      id INTEGER PRIMARY KEY, kid TEXT, action_line TEXT, due_date TEXT,
+      date_unclear INTEGER DEFAULT 0, unclear_sent INTEGER DEFAULT 0, confidence REAL, source_id TEXT, first_seen TEXT);
+    CREATE TABLE IF NOT EXISTS sent (id INTEGER PRIMARY KEY, day TEXT, slot TEXT, text TEXT, at TEXT);
+  `);
+  return db;
+}
+export const kvGet = (db, k) => db.prepare('SELECT value FROM kv WHERE key = ?').get(k)?.value;
+export const kvSet = (db, k, v) => db.prepare('INSERT INTO kv VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(k, String(v));
+export const isProcessed = (db, id) => !!db.prepare('SELECT 1 FROM processed WHERE source_id = ?').get(id);
+export const markProcessed = (db, id) => db.prepare('INSERT OR IGNORE INTO processed VALUES (?, ?)').run(id, new Date().toISOString());
+
+// ── task rules ────────────────────────────────────────────────────────────
+export function parseModelJson(text) {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end < start) throw new Error('no JSON object');
+  const obj = JSON.parse(text.slice(start, end + 1));
+  if (!Array.isArray(obj.tasks)) throw new Error('missing tasks array');
+  return obj.tasks;
+}
+
+/** Clean model tasks, or drop them with a reason. Kid and source come from the source, not the model. */
+export function validateTasks(raw, { kid, sourceId, today }) {
+  const ok = [];
+  const dropped = [];
+  for (const t of raw) {
+    const line = String(t?.action_line || '').replace(/\s+/g, ' ').trim().replace(/[.!]+$/, '');
+    const conf = Number(t?.confidence ?? 0);
+    if (!line) { dropped.push({ t, why: 'empty action_line' }); continue; }
+    if (conf < MIN_CONFIDENCE) { dropped.push({ t, why: `low confidence ${conf}` }); continue; }
+    let due = t?.due_date;
+    if (!isValidYmd(due)) due = null;
+    else if (due < today) { dropped.push({ t, why: `due date ${due} is past` }); continue; }
+    else if (daysBetween(today, due) > MAX_AHEAD_DAYS) { dropped.push({ t, why: `due date ${due} over ${MAX_AHEAD_DAYS} days away` }); continue; }
+    ok.push({ kid, action_line: line.split(' ').slice(0, 12).join(' '), due_date: due, date_unclear: due ? 0 : 1, confidence: conf, source_id: sourceId });
+  }
+  return { ok, dropped };
+}
+
+const STOP = new Set(['the', 'a', 'an', 'to', 'for', 'and', 'of', 'on', 'in', 'your', 'child', 'school', 'please', 'kindly']);
+const words = (s) => new Set(s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w)));
+function similar(a, b) {
+  const A = words(a);
+  const B = words(b);
+  if (!A.size || !B.size) return a.toLowerCase() === b.toLowerCase();
+  let inter = 0;
+  for (const w of A) if (B.has(w)) inter++;
+  return inter / (A.size + B.size - inter) >= 0.6;
+}
+// Same kid, same (or both unclear) date, near-identical wording.
+export const isDuplicate = (t, existing) =>
+  existing.some((x) => x.kid === t.kid && (x.due_date ?? null) === (t.due_date ?? null) && similar(x.action_line, t.action_line));
+
+export function saveTasks(db, tasks, today) {
+  const existing = db.prepare('SELECT kid, action_line, due_date FROM tasks').all();
+  const insert = db.prepare('INSERT INTO tasks (kid, action_line, due_date, date_unclear, confidence, source_id, first_seen) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  let added = 0;
+  for (const t of tasks) {
+    if (isDuplicate(t, existing)) continue;
+    insert.run(t.kid, t.action_line, t.due_date, t.date_unclear, t.confidence, t.source_id, today);
+    existing.push(t);
+    added++;
+  }
+  return added;
+}
+
+/** Remind daily until the due date; tasks with an unclear date only until sent once. */
+export const tasksForToday = (db, today) => [
+  ...db.prepare('SELECT * FROM tasks WHERE date_unclear = 0 AND due_date >= ? AND first_seen <= ?').all(today, today),
+  ...db.prepare('SELECT * FROM tasks WHERE date_unclear = 1 AND unclear_sent = 0').all(),
+];
+
+export function buildDigest(tasks, today, mention) {
+  if (!tasks.length) return null;
+  const tomorrow = addDays(today, 1);
+  const lines = [...tasks]
+    .sort((a, b) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999') || a.kid.localeCompare(b.kid))
+    .map((t) => {
+      if (!t.due_date) return `- ${t.kid}: ${t.action_line} - date unclear, check source`;
+      const tag = t.due_date === today ? ' (TODAY)' : t.due_date === tomorrow ? ' (TOMORROW)' : '';
+      return `- ${t.kid}: ${t.action_line} - ${pretty(t.due_date)}${tag}`;
+    });
+  return [`${mention} School - ${pretty(today)}`, ...lines].join('\n');
+}
+
+// ── text extraction ───────────────────────────────────────────────────────
+const OCR_BIN = path.join(DATA, 'ocr');
+
+/** OCR an image, or text from a PDF (OCR for scanned pages). Builds the macOS helper on first use. */
+export function fileText(file) {
+  if (!fs.existsSync(OCR_BIN)) execFileSync('swiftc', ['-O', path.join(ROOT, 'ocr.swift'), '-o', OCR_BIN]);
+  return execFileSync(OCR_BIN, [file], { encoding: 'utf8', timeout: 120000 }).trim();
+}
+
+/** Every tab of a workbook as CSV, skipping empty rows. */
+export function sheetText(buf) {
+  const wb = XLSX.read(buf, { type: 'buffer', cellDates: true });
+  return wb.SheetNames.map((name) => {
+    const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], { blankrows: false, dateNF: 'yyyy-mm-dd' });
+    return `## Tab: ${name}\n${csv.split('\n').filter((l) => l.replace(/,/g, '').trim()).join('\n')}`;
+  }).join('\n\n');
+}
+
+export const htmlToText = (html) => html
+  .replace(/<(script|style)[\s\S]*?<\/\1>/gi, '')
+  .replace(/<br\s*\/?>|<\/(p|div|tr|li|h\d)>/gi, '\n')
+  .replace(/<[^>]+>/g, ' ')
+  .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  .replace(/&#39;|&rsquo;/g, "'").replace(/&quot;/g, '"')
+  .replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim();
+
+/** Google Docs/Sheets/Drive file links found in text. */
+export function driveLinks(text) {
+  const out = new Map();
+  const re = /https:\/\/(?:docs|drive)\.google\.com\/(?:(document|spreadsheets|presentation)\/d\/|file\/d\/|open\?id=|uc\?(?:export=\w+&)?id=)([\w-]{20,})/g;
+  for (const m of text.matchAll(re)) {
+    if (!out.has(m[2])) out.set(m[2], { id: m[2], kind: { document: 'doc', spreadsheets: 'sheet', presentation: 'slides' }[m[1]] || 'file' });
+  }
+  return [...out.values()];
+}
+
+/** Classroom post URL hidden in the email's "See details" AccountChooser link. */
+export function classroomPostUrl(raw) {
+  for (const m of raw.matchAll(/continue=(https:\/\/classroom\.google\.com\/c\/[^&"\s>]+)/g)) {
+    const url = decodeURIComponent(m[1]).split('?')[0];
+    if (url.includes('/p/')) return url;
+  }
+  return null;
+}
+
+export const sha1 = (s) => crypto.createHash('sha1').update(s).digest('hex');
+
+// ── local model (LM Studio) ───────────────────────────────────────────────
+// Reuses the model if it's already loaded (and leaves it loaded); otherwise loads it,
+// and unloads it on exit, including on errors and Ctrl-C.
+const LMS = path.join(os.homedir(), '.lmstudio/bin/lms');
+export const MODEL_ID = 'school-reminder-bot';
+const lms = async (...a) => (await promisify(execFile)(LMS, a, { encoding: 'utf8' })).stdout;
+let model = null; // { id, owned, startedServer }
+
+export async function ensureModel() {
+  const startedServer = !JSON.parse(await lms('server', 'status', '--json')).running;
+  if (startedServer) await lms('server', 'start');
+  const matches = (m) => [m.modelKey, m.path, m.indexedModelIdentifier].includes(config.model);
+  const running = JSON.parse(await lms('ps', '--json')).find((m) => m.identifier === MODEL_ID || matches(m));
+  if (running) {
+    // Our own identifier here means a copy left behind by a crashed run: use it, then unload it.
+    model = { id: running.identifier, owned: running.identifier === MODEL_ID, startedServer };
+    log.info(`model already loaded, reusing it (${running.identifier})`);
+    return;
+  }
+  const key = JSON.parse(await lms('ls', '--json')).find(matches)?.modelKey;
+  if (!key) throw new Error(`Model "${config.model}" is not downloaded in LM Studio`);
+  model = { id: MODEL_ID, owned: true, startedServer }; // set first so a crash mid-load still cleans up
+  await lms('load', key, '--identifier', MODEL_ID, '--context-length', '16384', '-y');
+  log.info(`model loaded: ${key}`);
+}
+
+/** Unload the model only if this run loaded it. Synchronous so it also works in the exit handler. */
+export function releaseModel() {
+  if (!model) return;
+  const { owned, startedServer } = model;
+  model = null;
+  const run = (...a) => execFileSync(LMS, a, { stdio: 'ignore' });
+  if (owned) try { run('unload', MODEL_ID); log.info('model unloaded'); } catch (err) { log.warn(`model unload failed: ${err.message}`); }
+  if (startedServer) try { run('server', 'stop'); } catch { /* already stopped */ }
+}
+process.on('exit', releaseModel);
+
+const SYSTEM = `You extract action items for a parent from school messages (emails, class announcements, spreadsheets, teacher WhatsApp messages, OCR text of notices).
+Return ONLY JSON: {"tasks":[{"kid":"<given kid>","action_line":"...","due_date":"YYYY-MM-DD or null","confidence":0.0-1.0}]}
+Rules:
+- action_line: imperative, max 12 words, concrete (e.g. "Bring colour palette", "Finish Maths homework pg 12", "Register for Navarathri performance").
+- Only things the parent/child must DO or BRING, or dated events to attend. Ignore circulars with no action, recaps of past events, promotions, greetings.
+- Resolve relative dates ("tomorrow", "Monday", "29/09") against the message date. Dates are Indian format (DD/MM). Timezone IST.
+- For deadlines ("fill form by 18th") use that deadline as due_date.
+- Registration/sign-up for an event with no stated deadline: due_date is the event date. Merge "register" and "attend" for the same event into one task.
+- If a task clearly exists but its date is unknown, set due_date to null.
+- One task per distinct action. No tasks -> {"tasks":[]}.`;
+
+async function complete(messages) {
+  // Qwen chat format ending in an empty <think> block: skips hidden reasoning (~10x faster).
+  const prompt = messages.map((m) => `<|im_start|>${m.role}\n${m.content}<|im_end|>\n`).join('') + '<|im_start|>assistant\n<think>\n\n</think>\n\n';
+  const res = await fetch('http://127.0.0.1:1234/v1/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: model?.id ?? MODEL_ID, prompt, temperature: 0, max_tokens: 1500, stop: ['<|im_end|>'] }),
+    signal: AbortSignal.timeout(5 * 60 * 1000),
+  });
+  if (!res.ok) throw new Error(`LM Studio ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return (await res.json()).choices[0].text;
+}
+
+/** Raw model tasks for one source item, or null if the reply was invalid twice. */
+export async function extractTasks(item, today) {
+  const messages = [
+    { role: 'system', content: SYSTEM },
+    { role: 'user', content: `Kid: ${item.kid}\nSource: ${item.kind}\nMessage date: ${item.date} (${pretty(item.date)})\nToday: ${today} (${pretty(today)})\n---\n${item.text.slice(0, 30000)}` },
+  ];
+  let reply = await complete(messages);
+  try { return parseModelJson(reply); } catch (err) { log.warn(`bad JSON for ${item.sourceId} (${err.message}), retrying`); }
+  messages.push({ role: 'assistant', content: reply }, { role: 'user', content: 'That was not valid JSON. Reply with ONLY the JSON object.' });
+  reply = await complete(messages);
+  try { return parseModelJson(reply); } catch (err) {
+    log.error(`skipping ${item.sourceId}: invalid JSON after retry (${err.message})`);
+    return null;
+  }
+}

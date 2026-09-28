@@ -3,21 +3,8 @@
 .env.*
 !.env.example
 
-# Local state: SQLite DB, logs, WhatsApp session, school-account Chrome profile, downloads
+# Local state: database, logs, logins, OCR build, caches
 data/
-*.db
-*.db-*
-*.log
-
-# Build output / deps
 node_modules/
-bin/extract
-
-# OS / editor
+.wwebjs_*/
 .DS_Store
-.vscode/
-.idea/
-
-# whatsapp-web.js page cache
-.wwebjs_cache/
-.wwebjs_auth/

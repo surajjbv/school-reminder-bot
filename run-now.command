@@ -32,7 +32,7 @@ fi
 trap 'rmdir data/state/lock 2>/dev/null; ~/.lmstudio/bin/lms unload school-reminder-bot >/dev/null 2>&1' EXIT
 
 START=$SECONDS
-node --disable-warning=ExperimentalWarning src/index.js --slot "manual-$(date +%H%M%S)"
+node --disable-warning=ExperimentalWarning bot.js --slot "manual-$(date +%H%M%S)"
 CODE=$?
 echo
 if (( CODE == 0 )); then
