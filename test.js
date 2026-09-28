@@ -70,7 +70,8 @@ test('a date the message does not state is dropped (task kept as undetermined)',
     { action_line: 'Bring wheat flour', due_date: '2026-10-17', date_source: '17/08', confidence: 1 },
     { action_line: 'Submit homework', due_date: '2026-09-29', date_source: 'due 29/09/26', confidence: 1 },
   ], { kid: 'Anu', sourceId: 'x', today, sourceText });
-  assert.deepEqual(ok.map((t) => t.due_date), [null, null, null, null, '2026-09-29']);
+  // 17/08 is past -> dropped; invented/unquoted dates -> undetermined; real quote -> kept
+  assert.deepEqual(ok.map((t) => t.due_date), [null, null, null, '2026-09-29']);
 });
 
 test('dedupes near-identical tasks', () => {

@@ -131,23 +131,32 @@ const norm = (s) => String(s).toLowerCase().replace(/[*_]/g, '').replace(/\s+/g,
 // Must look like a date or day: 29/09, 2026-10-01, 2nd October, Oct 2, Friday, tomorrow, next week.
 const DATE_WORDS = /\d{1,4}[/.-]\d{1,2}|\b\d{1,2}(st|nd|rd|th)?\s*(of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b|\b(mon|tues?|wed(nes)?|thu(rs)?|fri|sat(ur)?|sun)(day)?\b|\b(today|tonight|tomorrow|next week)\b/i;
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-// If the quote spells out a day and month (29/09, 2026-10-01, 2nd October, Oct 2), they must match the due date.
-function quoteMatches(quote, due) {
-  const [, m, d] = due.split('-').map(Number);
+const ymd = (y, m, d) => `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+/**
+ * The due date, taken from the words the model quoted. A quote with an explicit day and month
+ * (29/09, 2026-10-01, 2nd October, Oct 2) decides the date itself; a relative quote
+ * ("tomorrow", "Friday") keeps the model's resolved date. No usable quote in the message -> null.
+ */
+function groundedDate(quote, source, modelDate, today) {
+  if (!quote || !DATE_WORDS.test(quote) || !norm(source).includes(norm(quote))) return null;
   const q = quote.toLowerCase();
-  const iso = q.match(/\b\d{4}-(\d{1,2})-(\d{1,2})\b/);
-  if (iso) return +iso[1] === m && +iso[2] === d;
+  const year = Number(today.slice(0, 4));
+  const pick = (m, d) => { // the year closest to today
+    const dates = [year - 1, year, year + 1].map((y) => ymd(y, m, d)).filter(isValidYmd);
+    return dates.sort((a, b) => Math.abs(daysBetween(today, a)) - Math.abs(daysBetween(today, b)))[0] ?? null;
+  };
+  const iso = q.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
+  if (iso) { const v = ymd(iso[1], iso[2], iso[3]); return isValidYmd(v) ? v : null; }
   const dm = q.match(/\b(\d{1,2})[/.-](\d{1,2})\b/);
-  if (dm) return +dm[1] === d && +dm[2] === m;
+  if (dm) return pick(+dm[2], +dm[1]);
   const named = q.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?([a-z]{3})/) || q.match(/\b([a-z]{3})[a-z]*\.?\s+(\d{1,2})\b/);
   if (named) {
     const [day, mon] = /\d/.test(named[1]) ? [named[1], named[2]] : [named[2], named[1]];
-    if (MONTHS.includes(mon)) return +day === d && MONTHS.indexOf(mon) + 1 === m;
+    if (MONTHS.includes(mon)) return pick(MONTHS.indexOf(mon) + 1, +day);
   }
-  return true; // relative ("tomorrow", "Friday"): can't be checked mechanically
+  return isValidYmd(modelDate) ? modelDate : null;
 }
-const dateIsInSource = (quote, source, due) =>
-  !!quote && DATE_WORDS.test(quote) && norm(source).includes(norm(quote)) && quoteMatches(quote, due);
 
 /** Clean model tasks, or drop them with a reason. Kid and source come from the source, not the model. */
 export function validateTasks(raw, { kid, sourceId, today, sourceText = '' }) {
@@ -159,14 +168,10 @@ export function validateTasks(raw, { kid, sourceId, today, sourceText = '' }) {
     if (!line) { dropped.push({ t, why: 'empty action_line' }); continue; }
     if (conf < MIN_CONFIDENCE) { dropped.push({ t, why: `low confidence ${conf}` }); continue; }
     if (/\b(otp|one[- ]time|password|verification code)\b/i.test(line)) { dropped.push({ t, why: 'mentions a login/OTP code' }); continue; }
-    let due = t?.due_date;
-    if (isValidYmd(due) && sourceText && !dateIsInSource(t?.date_source, sourceText, due)) {
-      dropped.push({ t, why: `date ${due} not stated in the message (quote: ${JSON.stringify(t?.date_source ?? null)}), kept as undetermined` });
-      due = null;
-    }
-    if (!isValidYmd(due)) due = null;
-    else if (due < today) { dropped.push({ t, why: `due date ${due} is past` }); continue; }
-    else if (daysBetween(today, due) > MAX_AHEAD_DAYS) { dropped.push({ t, why: `due date ${due} over ${MAX_AHEAD_DAYS} days away` }); continue; }
+    let due = sourceText ? groundedDate(t?.date_source, sourceText, t?.due_date, today) : (isValidYmd(t?.due_date) ? t.due_date : null);
+    if (isValidYmd(t?.due_date) && due !== t.due_date) log.info(`date for "${line}": model said ${t.due_date}, message says ${due ?? 'nothing'} (quote: ${JSON.stringify(t?.date_source ?? null)})`);
+    if (due && due < today) { dropped.push({ t, why: `due date ${due} is past` }); continue; }
+    if (due && daysBetween(today, due) > MAX_AHEAD_DAYS) { dropped.push({ t, why: `due date ${due} over ${MAX_AHEAD_DAYS} days away` }); continue; }
     ok.push({ kid, action_line: shorten(line), due_date: due, date_unclear: due ? 0 : 1, confidence: conf, source_id: sourceId });
   }
   return { ok, dropped };
