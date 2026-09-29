@@ -224,17 +224,19 @@ export function markSent(db, tasks, today) {
   for (const t of tasks) update.run(today, t.id);
 }
 
+/** WhatsApp message: tasks grouped under one heading per due day (WhatsApp *bold* and _italic_). */
 export function buildDigest(tasks, today, mention, newOnly = false) {
   if (!tasks.length) return null;
   const tomorrow = addDays(today, 1);
-  const lines = [...tasks]
-    .sort((a, b) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999') || a.kid.localeCompare(b.kid))
-    .map((t) => {
-      if (!t.due_date) return `- ${t.kid}: ${t.action_line} - date undetermined${t.posted ? ` (posted ${pretty(t.posted)})` : ''}`;
-      const tag = t.due_date === today ? ' (TODAY)' : t.due_date === tomorrow ? ' (TOMORROW)' : '';
-      return `- ${t.kid}: ${t.action_line} - ${pretty(t.due_date)}${tag}`;
-    });
-  return [`${mention} ${newOnly ? 'New school tasks' : 'School'} - ${pretty(today)}`, ...lines].join('\n');
+  const heading = (due) => due === today ? '🔴 *TODAY*' : due === tomorrow ? `🟠 *TOMORROW* · ${pretty(due)}` : due ? `📅 *${pretty(due)}*` : '❓ *Date undetermined*';
+  const plain = (s) => s.replace(/[*_~`]/g, ''); // stray marks would break WhatsApp formatting
+  const sorted = [...tasks].sort((a, b) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999') || a.kid.localeCompare(b.kid));
+  const out = [`${mention} ${newOnly ? '🆕 *New school tasks*' : '🎒 *School tasks*'} · ${pretty(today)}`];
+  for (const [due, group] of Map.groupBy(sorted, (t) => t.due_date ?? null)) {
+    out.push('', heading(due));
+    for (const t of group) out.push(`• *${t.kid}*: ${plain(t.action_line)}${!due && t.posted ? ` _(posted ${pretty(t.posted)})_` : ''}`);
+  }
+  return out.join('\n');
 }
 
 // ── text extraction ───────────────────────────────────────────────────────

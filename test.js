@@ -89,18 +89,28 @@ test('dedupes near-identical tasks', () => {
   assert.ok(isDuplicate({ ...a, action_line: "Complete Cursive 'c' and 'a' in notebook by 29/09/26" }, [c]));
 });
 
-test('digest format, sorted by due date', () => {
+test('digest format, grouped by due date', () => {
   assert.equal(buildDigest([
     { kid: 'Ravi', action_line: 'Homework pg 12', due_date: '2026-09-30' },
-    { kid: 'Anu', action_line: 'Bring colour palette', due_date: '2026-09-29' },
+    { kid: 'Anu', action_line: 'Bring *colour* palette', due_date: '2026-09-29' },
     { kid: 'Anu', action_line: 'Wear yellow dress', due_date: '2026-09-28' },
     { kid: 'Ravi', action_line: 'Pay trip fee', due_date: null, posted: '2026-09-13' },
+    { kid: 'Anu', action_line: 'Bring old newspaper', due_date: '2026-09-30' },
   ], today, '@Partner'), [
-    '@Partner School - Mon 28 Sep',
-    '- Anu: Wear yellow dress - Mon 28 Sep (TODAY)',
-    '- Anu: Bring colour palette - Tue 29 Sep (TOMORROW)',
-    '- Ravi: Homework pg 12 - Wed 30 Sep',
-    '- Ravi: Pay trip fee - date undetermined (posted Sun 13 Sep)',
+    '@Partner 🎒 *School tasks* · Mon 28 Sep',
+    '',
+    '🔴 *TODAY*',
+    '• *Anu*: Wear yellow dress',
+    '',
+    '🟠 *TOMORROW* · Tue 29 Sep',
+    '• *Anu*: Bring colour palette',
+    '',
+    '📅 *Wed 30 Sep*',
+    '• *Anu*: Bring old newspaper',
+    '• *Ravi*: Homework pg 12',
+    '',
+    '❓ *Date undetermined*',
+    '• *Ravi*: Pay trip fee _(posted Sun 13 Sep)_',
   ].join('\n'));
   assert.equal(buildDigest([], today, '@Partner'), null);
 });
@@ -117,7 +127,7 @@ test('first message of the day: full list; later: only new; daily until due, the
   assert.deepEqual(tasksToSend(db, today, true).map((x) => x.action_line), ['Bring old newspaper']); // evening: only the new one
   assert.equal(tasksToSend(db, '2026-09-29', false).length, 2); // next morning: both still due, unclear one not repeated
   assert.equal(tasksToSend(db, '2026-09-30', false).length, 0); // after the due date
-  assert.match(buildDigest(morning, today, '@P', true), /^@P New school tasks - Mon 28 Sep/);
+  assert.match(buildDigest(morning, today, '@P', true), /^@P 🆕 \*New school tasks\* · Mon 28 Sep/);
 });
 
 // ── sources ──
