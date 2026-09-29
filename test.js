@@ -90,13 +90,13 @@ test('digest format, sorted by due date', () => {
     { kid: 'Ravi', action_line: 'Homework pg 12', due_date: '2026-09-30' },
     { kid: 'Anu', action_line: 'Bring colour palette', due_date: '2026-09-29' },
     { kid: 'Anu', action_line: 'Wear yellow dress', due_date: '2026-09-28' },
-    { kid: 'Ravi', action_line: 'Pay trip fee', due_date: null },
+    { kid: 'Ravi', action_line: 'Pay trip fee', due_date: null, posted: '2026-09-13' },
   ], today, '@Partner'), [
     '@Partner School - Mon 28 Sep',
     '- Anu: Wear yellow dress - Mon 28 Sep (TODAY)',
     '- Anu: Bring colour palette - Tue 29 Sep (TOMORROW)',
     '- Ravi: Homework pg 12 - Wed 30 Sep',
-    '- Ravi: Pay trip fee - date undetermined',
+    '- Ravi: Pay trip fee - date undetermined (posted Sun 13 Sep)',
   ].join('\n'));
   assert.equal(buildDigest([], today, '@Partner'), null);
 });

@@ -120,7 +120,7 @@ async function main() {
           log.info(`item ${i + 1}/${items.length}: ${item.kind}, ${item.date}`);
           const raw = await extractTasks(item, today);
           if (raw) {
-            const { ok, dropped } = validateTasks(raw, { kid: item.kid, sourceId: item.sourceId, today, sourceText: item.text });
+            const { ok, dropped } = validateTasks(raw, { kid: item.kid, sourceId: item.sourceId, today, sourceText: item.text, posted: item.date });
             dropped.forEach((d) => log.info(`dropped from ${item.sourceId}: "${d.t?.action_line}" (${d.why})`));
             log.info(`${item.sourceId}: ${ok.length} task(s), ${saveTasks(db, ok, today)} new`);
           } else {

@@ -97,9 +97,10 @@ export function openDb(file = path.join(DATA, 'bot.db')) {
     CREATE TABLE IF NOT EXISTS watched (id TEXT PRIMARY KEY, modified TEXT, first_seen TEXT); -- attached Sheets/Docs re-checked for edits
     CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY, kid TEXT, action_line TEXT, due_date TEXT,
-      date_unclear INTEGER DEFAULT 0, last_sent TEXT, confidence REAL, source_id TEXT, first_seen TEXT);
+      date_unclear INTEGER DEFAULT 0, last_sent TEXT, confidence REAL, source_id TEXT, first_seen TEXT, posted TEXT);
     CREATE TABLE IF NOT EXISTS sent (id INTEGER PRIMARY KEY, day TEXT, slot TEXT, text TEXT, at TEXT);
   `);
+  try { db.exec('ALTER TABLE tasks ADD COLUMN posted TEXT'); } catch { /* already there */ } // databases from before 'posted'
   return db;
 }
 export const kvGet = (db, k) => db.prepare('SELECT value FROM kv WHERE key = ?').get(k)?.value;
@@ -159,7 +160,7 @@ function groundedDate(quote, source, modelDate, today) {
 }
 
 /** Clean model tasks, or drop them with a reason. Kid and source come from the source, not the model. */
-export function validateTasks(raw, { kid, sourceId, today, sourceText = '' }) {
+export function validateTasks(raw, { kid, sourceId, today, sourceText = '', posted = null }) {
   const ok = [];
   const dropped = [];
   for (const t of raw) {
@@ -172,7 +173,7 @@ export function validateTasks(raw, { kid, sourceId, today, sourceText = '' }) {
     if (isValidYmd(t?.due_date) && due !== t.due_date) log.info(`date for "${line}": model said ${t.due_date}, message says ${due ?? 'nothing'} (quote: ${JSON.stringify(t?.date_source ?? null)})`);
     if (due && due < today) { dropped.push({ t, why: `due date ${due} is past` }); continue; }
     if (due && daysBetween(today, due) > MAX_AHEAD_DAYS) { dropped.push({ t, why: `due date ${due} over ${MAX_AHEAD_DAYS} days away` }); continue; }
-    ok.push({ kid, action_line: shorten(line), due_date: due, date_unclear: due ? 0 : 1, confidence: conf, source_id: sourceId });
+    ok.push({ kid, action_line: shorten(line), due_date: due, date_unclear: due ? 0 : 1, confidence: conf, source_id: sourceId, posted });
   }
   return { ok, dropped };
 }
@@ -195,11 +196,11 @@ export const isDuplicate = (t, existing) =>
 
 export function saveTasks(db, tasks, today) {
   const existing = db.prepare('SELECT kid, action_line, due_date FROM tasks').all();
-  const insert = db.prepare('INSERT INTO tasks (kid, action_line, due_date, date_unclear, confidence, source_id, first_seen) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  const insert = db.prepare('INSERT INTO tasks (kid, action_line, due_date, date_unclear, confidence, source_id, first_seen, posted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
   let added = 0;
   for (const t of tasks) {
     if (isDuplicate(t, existing)) continue;
-    insert.run(t.kid, t.action_line, t.due_date, t.date_unclear, t.confidence, t.source_id, today);
+    insert.run(t.kid, t.action_line, t.due_date, t.date_unclear, t.confidence, t.source_id, today, t.posted ?? null);
     existing.push(t);
     added++;
   }
@@ -228,7 +229,7 @@ export function buildDigest(tasks, today, mention, newOnly = false) {
   const lines = [...tasks]
     .sort((a, b) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999') || a.kid.localeCompare(b.kid))
     .map((t) => {
-      if (!t.due_date) return `- ${t.kid}: ${t.action_line} - date undetermined`;
+      if (!t.due_date) return `- ${t.kid}: ${t.action_line} - date undetermined${t.posted ? ` (posted ${pretty(t.posted)})` : ''}`;
       const tag = t.due_date === today ? ' (TODAY)' : t.due_date === tomorrow ? ' (TOMORROW)' : '';
       return `- ${t.kid}: ${t.action_line} - ${pretty(t.due_date)}${tag}`;
     });
