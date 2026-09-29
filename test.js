@@ -57,6 +57,7 @@ test('validation: past, too far, unclear, low confidence, long lines', () => {
   assert.deepEqual(ok.map((t) => t.action_line), ['Bring colour palette', 'Send fee receipt', 'one two three four five six seven eight nine ten eleven twelve', 'Report to check-in counter with QR code and school ID card']);
   assert.equal(ok[1].date_unclear, 1);
   assert.equal(ok[0].kid, 'Anu');
+  assert.equal(validateTasks([{ action_line: 'Bring apron', due_date: null }], { kid: 'Anu', sourceId: 'x', today }).ok.length, 1); // no confidence given
   assert.equal(dropped.length, 3);
   assert.equal(validateTasks([{ action_line: 'Submit registration with OTP 5931', due_date: '2026-09-29', confidence: 1 }], { kid: 'Anu', sourceId: 'x', today }).ok.length, 0);
 });
@@ -123,11 +124,11 @@ test('email: finds Drive links', () => {
 
 test('sheet: only the 3 most recent tabs (by date in the tab name)', () => {
   const wb = XLSX.utils.book_new();
-  for (const name of ['Instructions', '080926- 110926', '210926- 250926', '010926- 050926', '150926- 180926']) {
+  for (const name of ['Instructions', '10826-14826', '210926- 250926', '7926-11926', '150926- 180926']) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Week', name]]), name);
   }
   const text = sheetText(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
-  assert.deepEqual([...text.matchAll(/## Tab: (.+)/g)].map((m) => m[1]), ['210926- 250926', '150926- 180926', '080926- 110926']);
+  assert.deepEqual([...text.matchAll(/## Tab: (.+)/g)].map((m) => m[1]), ['210926- 250926', '150926- 180926', '7926-11926']);
 });
 
 test('sheet: undated tabs, first 3, skips blank rows', () => {

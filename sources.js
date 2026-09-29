@@ -60,13 +60,16 @@ export async function driveText(id) {
 }
 
 // ── Gmail ─────────────────────────────────────────────────────────────────
+// A reply's quoted original ("On <date> ... wrote:" and ">" lines) is dropped: the original is read on its own.
+const stripQuoted = (t) => t.split(/^On .{5,200}?wrote:\s*$/ms)[0].split('\n').filter((l) => !l.startsWith('>')).join('\n').trim();
+
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const READABLE = /\.(pdf|png|jpe?g|heic|webp)$/i;
 
 /** School mails after `afterMs`, oldest first, with text of PDF/image attachments. */
 export async function fetchSchoolMails(afterMs) {
-  // Classroom notification emails are skipped: Classroom posts come from the Classroom API.
-  const q = encodeURIComponent(`${config.schoolQuery} -from:classroom.google.com after:${Math.floor(afterMs / 1000)}`);
+  // Skipped: Classroom notification emails (posts come from the Classroom API) and mail sent from this account.
+  const q = encodeURIComponent(`${config.schoolQuery} -from:classroom.google.com -in:sent after:${Math.floor(afterMs / 1000)}`);
   const ids = [];
   let page = '';
   do {
@@ -83,7 +86,7 @@ export async function fetchSchoolMails(afterMs) {
     const body = (type) => parts.find((p) => p.mimeType === type && p.body?.data);
     const plain = body('text/plain');
     const html = body('text/html');
-    let text = plain ? unb64(plain.body.data).toString() : html ? htmlToText(unb64(html.body.data).toString()) : '';
+    let text = stripQuoted(plain ? unb64(plain.body.data).toString() : html ? htmlToText(unb64(html.body.data).toString()) : '');
     const raw = [plain, html].filter(Boolean).map((p) => unb64(p.body.data).toString()).join('\n'); // keeps Drive links
     for (const a of parts.filter((p) => p.filename && p.body?.attachmentId && READABLE.test(p.filename) && p.body.size <= 15e6)) {
       try {

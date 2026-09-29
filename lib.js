@@ -165,7 +165,7 @@ export function validateTasks(raw, { kid, sourceId, today, sourceText = '', post
   const dropped = [];
   for (const t of raw) {
     const line = String(t?.action_line || '').replace(/\s+/g, ' ').trim().replace(/[.!]+$/, '');
-    const conf = Number(t?.confidence ?? 0);
+    const conf = Number(t?.confidence ?? 1); // some models (e.g. Gemma) omit it when certain
     if (!line) { dropped.push({ t, why: 'empty action_line' }); continue; }
     if (conf < MIN_CONFIDENCE) { dropped.push({ t, why: `low confidence ${conf}` }); continue; }
     if (/\b(otp|one[- ]time|password|verification code)\b/i.test(line)) { dropped.push({ t, why: 'mentions a login/OTP code' }); continue; }
@@ -245,11 +245,20 @@ export function fileText(file) {
   return execFileSync(OCR_BIN, [file], { encoding: 'utf8', timeout: 120000 }).trim();
 }
 
-// Latest date in a tab name like "210926- 250926" or "15/09/26 - 18/09/26" (as YYMMDD), or 0.
+// Latest date in a tab name, as YYMMDD (0 if none). Handles "15/09/26 - 18/09/26" and the compact
+// day-month-year runs schools use: "210926" = 21/09/26, "7926" = 7/9/26, "10826" = 10/8/26.
 function tabDate(name) {
-  const dates = [...name.matchAll(/(\d{1,2})[./-]?(\d{2})[./-]?(\d{2}|\d{4})(?!\d)/g)]
-    .map(([, d, m, y]) => Number(y.slice(-2)) * 1e4 + Number(m) * 100 + Number(d))
-    .filter((v) => v % 100 >= 1 && v % 100 <= 31 && Math.floor(v / 100) % 100 >= 1 && Math.floor(v / 100) % 100 <= 12);
+  const dates = [];
+  const add = (d, m, y) => { if (d >= 1 && d <= 31 && m >= 1 && m <= 12) dates.push((y % 100) * 1e4 + m * 100 + d); };
+  for (const [, d, m, y] of name.matchAll(/(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/g)) add(+d, +m, +y);
+  if (!dates.length) {
+    for (const run of name.match(/\d{4,6}/g) || []) {
+      const y = +run.slice(-2);
+      const dm = run.slice(0, -2);
+      const [d2, m2] = [+dm.slice(0, 2), +dm.slice(2)]; // prefer a 2-digit day ("10826" = 10 Aug, not 1 Aug)
+      if (dm.length >= 3 && d2 <= 31 && m2 >= 1 && m2 <= 12) add(d2, m2, y); else add(+dm.slice(0, 1), +dm.slice(1), y);
+    }
+  }
   return dates.length ? Math.max(...dates) : 0;
 }
 
@@ -325,6 +334,7 @@ Rules:
 - action_line: starts with a verb, max 12 words, concrete, no dates in it (keep a specific time like "2:15 PM"). Use only what the message says; never invent tasks.
 - Only things the parent/child must DO or BRING, or dated events to attend. Invitations to school events or competitions the child can join count (e.g. register/attend). Ignore circulars with no action, recaps of past events, greetings.
 - "View/see/access/check the attachment, picture, folder, link or timetable" is NOT a task.
+- Messages written TO the school (leave notes, "I will be late") or by other parents (e.g. "I have paid the fee") contain no tasks.
 - Lines like "Completed pg 10", "Introduction of ...", "Reinforcement of ..." describe class work already done: they are NOT tasks. In weekly-update sheets, tasks are under "Practice work"/"Submission Dates" and "Requirements".
 - Ignore OTP / verification-code / password emails completely, and never put any code or password in action_line.
 - Resolve relative dates ("tomorrow", "Monday", "29/09") against the message date. Dates are Indian format (DD/MM). Timezone IST.
@@ -334,17 +344,25 @@ Rules:
 - NEVER guess a date. due_date only if the message itself states the date or day for that task; copy those exact words into date_source. Otherwise due_date and date_source are null.
 - One task per distinct action, at most 10, most important first. No tasks -> {"tasks":[]}.`;
 
-async function complete(messages) {
-  // Qwen chat format ending in an empty <think> block: skips hidden reasoning (~10x faster).
-  const prompt = messages.map((m) => `<|im_start|>${m.role}\n${m.content}<|im_end|>\n`).join('') + '<|im_start|>assistant\n<think>\n\n</think>\n\n';
-  const res = await fetch('http://127.0.0.1:1234/v1/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: model?.id ?? MODEL_ID, prompt, temperature: 0, max_tokens: 1000, stop: ['<|im_end|>'] }),
-    signal: AbortSignal.timeout(5 * 60 * 1000),
+// Deterministic extraction: temperature 0, thinking off, capped reply length.
+const GEN = { temperature: 0, max_tokens: 1000 };
+const post = async (path, body) => {
+  const res = await fetch(`http://127.0.0.1:1234${path}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: model?.id ?? MODEL_ID, ...GEN, ...body }), signal: AbortSignal.timeout(5 * 60 * 1000),
   });
   if (!res.ok) throw new Error(`LM Studio ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  return (await res.json()).choices[0].text;
+  return res.json();
+};
+
+async function complete(messages) {
+  if (/qwen/i.test(config.model)) {
+    // Qwen thinks by default; its own chat format ending in an empty <think> block switches that off (~10x faster).
+    const prompt = messages.map((m) => `<|im_start|>${m.role}\n${m.content}<|im_end|>\n`).join('') + '<|im_start|>assistant\n<think>\n\n</think>\n\n';
+    return (await post('/v1/completions', { prompt, stop: ['<|im_end|>'] })).choices[0].text;
+  }
+  // Others (e.g. Gemma 4): LM Studio applies the model's own template; Gemma's thinking is off unless enabled.
+  return (await post('/v1/chat/completions', { messages })).choices[0].message.content;
 }
 
 /** Raw model tasks for one source item, or null if the reply was invalid twice. */
