@@ -26,7 +26,8 @@ export const config = {
   groupName: e.GROUP_NAME,
   mentionName: e.MENTION_NAME,
   mentionNumberEndsWith: e.MENTION_NUMBER_ENDS_WITH,
-  model: e.MODEL || 'lmstudio-community/Qwen3.5-9B-MLX-4bit',
+  model: e.MODEL || 'lmstudio-community/gemma-4-26B-A4B-it-QAT-MLX-4bit',
+  modelFallback: e.MODEL_FALLBACK ?? 'lmstudio-community/Qwen3.5-9B-MLX-4bit', // if LM Studio lacks memory for MODEL; empty = none
   // How far back the very first run reads; later runs read everything since the last run.
   emailLookbackDays: Number(e.EMAIL_LOOKBACK_DAYS || 14),
   whatsappLookbackDays: Number(e.WHATSAPP_LOOKBACK_DAYS || 14),
@@ -293,28 +294,50 @@ export function driveLinks(text) {
 
 // ── local model (LM Studio) ───────────────────────────────────────────────
 // Reuses the model if it's already loaded (and leaves it loaded); otherwise loads it,
-// and unloads it on exit, including on errors and Ctrl-C.
+// and unloads it on exit, including on errors and Ctrl-C. If LM Studio would refuse MODEL
+// for lack of memory, MODEL_FALLBACK is used instead.
 const LMS = path.join(os.homedir(), '.lmstudio/bin/lms');
 const MODEL_ID = 'school-reminder-bot';
+const CONTEXT = '16384';
 const lms = async (...a) => (await promisify(execFile)(LMS, a, { encoding: 'utf8' })).stdout;
-let model = null; // { id, owned, startedServer }
+let model = null; // { id, key, owned, startedServer }
 
 export async function ensureModel() {
   const startedServer = !JSON.parse(await lms('server', 'status', '--json')).running;
   if (startedServer) await lms('server', 'start');
-  const matches = (m) => [m.modelKey, m.path, m.indexedModelIdentifier].includes(config.model);
-  const running = JSON.parse(await lms('ps', '--json')).find((m) => m.identifier === MODEL_ID || matches(m));
-  if (running) {
-    // Our own identifier here means a copy left behind by a crashed run: use it, then unload it.
-    model = { id: running.identifier, owned: running.identifier === MODEL_ID, startedServer };
-    log.info(`model already loaded, reusing it (${running.identifier})`);
-    return;
+  const loaded = JSON.parse(await lms('ps', '--json'));
+  // Our own identifier means a copy left behind by a crashed run: use it, then unload it.
+  const leftover = loaded.find((m) => m.identifier === MODEL_ID);
+  if (leftover) {
+    model = { id: MODEL_ID, key: leftover.modelKey, owned: true, startedServer };
+    return log.info(`model already loaded, reusing it (${leftover.modelKey})`);
   }
-  const key = JSON.parse(await lms('ls', '--json')).find(matches)?.modelKey;
-  if (!key) throw new Error(`Model "${config.model}" is not downloaded in LM Studio`);
-  model = { id: MODEL_ID, owned: true, startedServer }; // set first so a crash mid-load still cleans up
-  await lms('load', key, '--identifier', MODEL_ID, '--context-length', '16384', '-y');
-  log.info(`model loaded: ${key}`);
+  const names = [config.model, config.modelFallback].filter(Boolean);
+  for (const name of names) {
+    const matches = (m) => [m.modelKey, m.path, m.indexedModelIdentifier].includes(name);
+    const running = loaded.find(matches);
+    if (running) {
+      model = { id: running.identifier, key: running.modelKey, owned: false, startedServer };
+      return log.info(`model already loaded, reusing it (${running.identifier})`);
+    }
+    const key = JSON.parse(await lms('ls', '--json')).find(matches)?.modelKey;
+    if (!key) throw new Error(`Model "${name}" is not downloaded in LM Studio`);
+    // LM Studio's memory guardrails: ask first whether it would refuse this model right now.
+    if (/will fail to load/i.test(await lms('load', key, '--estimate-only', '--context-length', CONTEXT))) {
+      log.warn(`not enough free memory for ${key} (LM Studio guardrails)`);
+      continue;
+    }
+    model = { id: MODEL_ID, key, owned: true, startedServer }; // set first so a crash mid-load still cleans up
+    try {
+      await lms('load', key, '--identifier', MODEL_ID, '--context-length', CONTEXT, '-y');
+    } catch (err) {
+      if (!/memory|resource|guardrail/i.test(err.message) || name === names.at(-1)) throw err;
+      log.warn(`LM Studio could not load ${key} for lack of memory, trying the fallback`);
+      continue;
+    }
+    return log.info(`model loaded: ${key}`);
+  }
+  throw new Error(`Not enough free memory to load ${names.join(' or ')}: close other apps or models`);
 }
 
 /** Unload the model only if this run loaded it. Synchronous so it also works in the exit handler. */
@@ -356,7 +379,7 @@ const post = async (path, body) => {
 };
 
 async function complete(messages) {
-  if (/qwen/i.test(config.model)) {
+  if (/qwen/i.test(model?.key ?? config.model)) {
     // Qwen thinks by default; its own chat format ending in an empty <think> block switches that off (~10x faster).
     const prompt = messages.map((m) => `<|im_start|>${m.role}\n${m.content}<|im_end|>\n`).join('') + '<|im_start|>assistant\n<think>\n\n</think>\n\n';
     return (await post('/v1/completions', { prompt, stop: ['<|im_end|>'] })).choices[0].text;

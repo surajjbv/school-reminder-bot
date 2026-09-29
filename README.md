@@ -18,7 +18,7 @@
 
 ## Setup (10 minutes, once)
 
-Needs: a Mac with Node 22+, Google Chrome, [LM Studio](https://lmstudio.ai) (model: Qwen3.5-9B), and Xcode command line tools.
+Needs: a Mac with Node 22+, Google Chrome, [LM Studio](https://lmstudio.ai) (models: Gemma 4 26B-A4B QAT; Qwen3.5-9B as the fallback when memory is short), and Xcode command line tools.
 
 1. `npm install`, then `cp .env.example .env` and fill in names, chats and group.
 2. In Google Cloud, enable the Gmail, Classroom and Drive APIs. Publish the consent screen, create a **Desktop** OAuth client, and put its ID and secret in `.env`.

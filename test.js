@@ -33,7 +33,10 @@ let replies = [];
 const realFetch = globalThis.fetch;
 before(async () => {
   if (LIVE) return ensureModel();
-  globalThis.fetch = async () => ({ ok: true, json: async () => ({ choices: [{ text: replies.shift() }] }) });
+  globalThis.fetch = async () => {
+    const text = replies.shift(); // both reply shapes: /v1/completions (Qwen) and /v1/chat/completions (others)
+    return { ok: true, json: async () => ({ choices: [{ text, message: { content: text } }] }) };
+  };
 });
 after(() => { if (LIVE) releaseModel(); else globalThis.fetch = realFetch; });
 
