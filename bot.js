@@ -2,13 +2,14 @@
 // Usage: node bot.js [--slot HH:MM]
 import { execFileSync } from 'node:child_process';
 import {
-  addDays, buildDigest, config, ensureModel, extractTasks, isProcessed, istDate, istTime,
+  addDays, buildDigest, config, currentSlot, ensureModel, extractTasks, isProcessed, istDate, istTime,
   kvGet, kvSet, log, markProcessed, openDb, releaseModel, requireConfig, markSent, saveTasks, tasksToSend, validateTasks,
 } from './lib.js';
 import { classroomPosts, driveModified, driveText, fetchSchoolMails, openWhatsApp, WhatsAppLoggedOut } from './sources.js';
 
 const args = process.argv.slice(2);
-const slot = args.includes('--slot') ? args[args.indexOf('--slot') + 1] : istTime();
+const slot = args.includes('--slot') ? args[args.indexOf('--slot') + 1] : currentSlot(); // schedule.sh passes the slot, run-now 'manual-...'
+const period = /^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(slot) ? slot : currentSlot(); // the send time this run belongs to, e.g. '2026-09-29 20:00'
 const WATCH_DAYS = 14; // re-check attached Sheets/Docs this long for edits
 const MAX_NESTED = 5;
 const RETRY_WINDOW = 3 * 864e5;
@@ -92,7 +93,7 @@ async function main() {
   requireConfig('emailKid', 'chatKid', 'teacherChat', 'groupName', 'mentionName');
   const today = istDate();
   const db = openDb();
-  log.info(`run start ${today} slot ${slot}`);
+  log.info(`run start ${today} slot ${slot} (send time ${period})`);
   let wa;
 
   // WhatsApp takes ~15 s to start: warm it up while Gmail/Classroom are read.
@@ -140,27 +141,32 @@ async function main() {
     chat.commit();
 
     log.step(4, "Building today's reminder");
-    const newOnly = !!db.prepare('SELECT 1 FROM sent WHERE day = ?').get(today); // already messaged today?
+    // sent.day holds the send time a message belongs to. Already messaged for it (e.g. by run-now)? Then only new tasks.
+    const newOnly = !!db.prepare('SELECT 1 FROM sent WHERE day = ?').get(period);
     const tasks = tasksToSend(db, today, newOnly);
-    log.info(`${tasks.length} task(s) to send (${newOnly ? 'only new since the last message today' : 'first message today: full list'})`);
-    if (tasks.length && !db.prepare('SELECT 1 FROM sent WHERE day = ? AND slot = ?').get(today, slot)) {
+    log.info(`${tasks.length} task(s) to send (${newOnly ? `only new since the last message for ${period}` : 'full list'})`);
+    if (tasks.length && !db.prepare('SELECT 1 FROM sent WHERE day = ? AND slot = ?').get(period, slot)) {
       const mention = await wa.mention();
       const text = buildDigest(tasks, today, mention.token, newOnly);
       log.step(5, `Sending to "${config.groupName}"`);
       log.box(`sending to "${config.groupName}"`, text.replace(mention.token, '@' + config.mentionName));
       await wa.sendToGroup(text, mention.id);
-      db.prepare('INSERT INTO sent (day, slot, text, at) VALUES (?, ?, ?, ?)').run(today, slot, text, new Date().toISOString());
+      db.prepare('INSERT INTO sent (day, slot, text, at) VALUES (?, ?, ?, ?)').run(period, slot, text, new Date().toISOString());
       markSent(db, tasks, today);
       log.sent(`${config.groupName}: ${text.replace(/\n/g, ' | ')}`);
     } else {
       log.step(5, 'Nothing to send');
-      log.info(tasks.length ? `slot ${slot} already sent today` : newOnly ? 'nothing new since the last message' : 'no tasks today, nothing sent');
+      log.info(tasks.length ? `slot ${slot} already sent` : newOnly ? 'nothing new since the last message' : 'no tasks today, nothing sent');
     }
   } catch (err) {
     // Tell the user without them having to read logs: WhatsApp to self, else a macOS notification.
-    const text = `School reminder bot FAILED during ${log.currentStep()}: ${err.message}. Details: data/bot.log`;
-    try { await wa.sendToSelf(text); } catch {
-      try { execFileSync('osascript', ['-e', `display notification ${JSON.stringify(err.message)} with title "School reminder bot failed"`]); } catch { /* no GUI */ }
+    // Scheduled runs retry every few minutes, so only the first failure per send time is messaged.
+    const text = `School reminder bot FAILED during ${log.currentStep()}: ${err.message}. It keeps retrying until sent. Details: data/bot.log`;
+    if (kvGet(db, 'alerted') !== period) {
+      kvSet(db, 'alerted', period);
+      try { await wa.sendToSelf(text); } catch {
+        try { execFileSync('osascript', ['-e', `display notification ${JSON.stringify(err.message)} with title "School reminder bot failed"`]); } catch { /* no GUI */ }
+      }
     }
     throw err;
   } finally {

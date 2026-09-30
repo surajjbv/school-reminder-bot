@@ -1,22 +1,18 @@
 # school-reminder-bot
 
-**One short WhatsApp every morning with every school task that's still due.** No apps to check, no messages missed.
+**One short WhatsApp every evening with every school task that's still due.** No apps to check, no messages missed.
 
 ```
-@Partner 🎒 School tasks · Mon 28 Sep
-
-🟠 TOMORROW · Tue 29 Sep
-• Anu: Bring colour palette
-
-📅 Wed 30 Sep
-• Ravi: Homework pg 12
+@Partner 🎒 School · Mon 28 Sep
+🟠 Anu: Bring colour palette · tomorrow
+📅 Ravi: Homework pg 12 · Wed 30 Sep
 ```
 
 ## What it does
 
 - **Reads** the kid's school Gmail, Google Classroom and attached Drive files, plus a teacher's WhatsApp chat, including photos and PDFs.
 - **Extracts** the tasks with a local AI model on the Mac. Nothing goes to the cloud.
-- **Sends** the full list at the first run of the day, and only new tasks at later runs. Each task repeats daily until its due date.
+- **Sends** one message a day at 8 pm (`RUN_TIMES`) with every task still due. Each task repeats daily until its due date.
 
 **$0 to run.** Fully automatic, read-only, private. About 7 seconds per run.
 
@@ -28,7 +24,7 @@ Needs: a Mac with Node 22+, Google Chrome, [LM Studio](https://lmstudio.ai) (mod
 2. In Google Cloud, enable the Gmail, Classroom and Drive APIs. Publish the consent screen, create a **Desktop** OAuth client, and put its ID and secret in `.env`.
 3. `npm run login:google` and choose the **kid's school account** (read-only, never expires).
 4. `npm run login:whatsapp` and scan the QR code.
-5. `npm run schedule`. It runs daily at `RUN_TIMES` (e.g. `10:00,20:00`), and 10 minutes after wake-up if the Mac was asleep.
+5. `npm run schedule`. It sends daily at `RUN_TIMES` (`20:00`). If the Mac was asleep or a send failed, it keeps retrying until sent, up to the next day's 8 pm.
 
 **Run now:** double-click `run-now.command`.
 

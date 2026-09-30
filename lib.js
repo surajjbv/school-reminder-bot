@@ -31,7 +31,9 @@ export const config = {
   // How far back the very first run reads; later runs read everything since the last run.
   emailLookbackDays: Number(e.EMAIL_LOOKBACK_DAYS || 14),
   whatsappLookbackDays: Number(e.WHATSAPP_LOOKBACK_DAYS || 14),
-  chromePath: e.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  // Send times (IST). Each one is retried until sent, up to the next send time (tomorrow's, for a single time).
+  runTimes: (e.RUN_TIMES || '20:00').split(',').map((t) => t.trim().padStart(5, '0')).filter((t) => /^\d\d:\d\d$/.test(t)).sort(),
+  chromePath:e.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 };
 const MIN_CONFIDENCE = 0.5;
 const MAX_AHEAD_DAYS = 60;
@@ -78,7 +80,13 @@ export function addDays(ymd, n) {
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 }
-const daysBetween = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5);
+/** The send time now being worked on: the latest one already passed, e.g. '2026-09-29 20:00' until 20:00 on the 30th. */
+export function currentSlot(now = new Date()) {
+  const [today, time] = [istDate(now), istTime(now)];
+  const passed = config.runTimes.filter((t) => t <= time);
+  return passed.length ? `${today} ${passed.at(-1)}` : `${addDays(today, -1)} ${config.runTimes.at(-1)}`;
+}
+const daysBetween =(a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5);
 const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 function pretty(ymd) { // 'Tue 29 Sep'
@@ -224,19 +232,19 @@ export function markSent(db, tasks, today) {
   for (const t of tasks) update.run(today, t.id);
 }
 
-/** WhatsApp message: tasks grouped under one heading per due day (WhatsApp *bold* and _italic_). */
+/** WhatsApp message: one line per task, soonest first; the emoji shows how urgent it is. */
 export function buildDigest(tasks, today, mention, newOnly = false) {
   if (!tasks.length) return null;
   const tomorrow = addDays(today, 1);
-  const heading = (due) => due === today ? '🔴 *TODAY*' : due === tomorrow ? `🟠 *TOMORROW* · ${pretty(due)}` : due ? `📅 *${pretty(due)}*` : '❓ *Date undetermined*';
-  const plain = (s) => s.replace(/[*_~`]/g, ''); // stray marks would break WhatsApp formatting
-  const sorted = [...tasks].sort((a, b) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999') || a.kid.localeCompare(b.kid));
-  const out = [`${mention} ${newOnly ? '🆕 *New school tasks*' : '🎒 *School tasks*'} · ${pretty(today)}`];
-  for (const [due, group] of Map.groupBy(sorted, (t) => t.due_date ?? null)) {
-    out.push('', heading(due));
-    for (const t of group) out.push(`• *${t.kid}*: ${plain(t.action_line)}${!due && t.posted ? ` _(posted ${pretty(t.posted)})_` : ''}`);
-  }
-  return out.join('\n');
+  const short = (ymd) => pretty(ymd).slice(4); // '13 Sep'
+  const when = (t) => t.due_date === today ? '🔴|today' : t.due_date === tomorrow ? '🟠|tomorrow' : t.due_date ? `📅|${pretty(t.due_date)}`
+    : `❓|no date${t.posted ? ` (posted ${short(t.posted)})` : ''}`;
+  // The kid's name is already in front, so drop it from the task ("Register Anu for ..." -> "Register for ...").
+  const task = (t) => t.action_line.replace(new RegExp(`\\s*\\b${t.kid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}('s)?\\b`, 'gi'), '').replace(/[*_~`]/g, '').trim();
+  const lines = [...tasks]
+    .sort((a, b) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999') || a.kid.localeCompare(b.kid))
+    .map((t) => { const [icon, date] = when(t).split('|'); return `${icon} ${t.kid}: ${task(t)} · ${date}`; });
+  return [`${mention} ${newOnly ? '🆕 New school tasks' : '🎒 School'} · ${pretty(today)}`, ...lines].join('\n');
 }
 
 // ── text extraction ───────────────────────────────────────────────────────

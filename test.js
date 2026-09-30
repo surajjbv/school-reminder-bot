@@ -5,7 +5,7 @@ import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as XLSX from 'xlsx';
 import {
-  buildDigest, driveLinks, ensureModel, extractTasks, fileText, isDuplicate,
+  buildDigest, config, currentSlot, driveLinks, ensureModel, extractTasks, fileText, isDuplicate,
   markSent, openDb, parseModelJson, releaseModel, saveTasks, sheetText, tasksToSend, validateTasks,
 } from './lib.js';
 
@@ -89,30 +89,32 @@ test('dedupes near-identical tasks', () => {
   assert.ok(isDuplicate({ ...a, action_line: "Complete Cursive 'c' and 'a' in notebook by 29/09/26" }, [c]));
 });
 
-test('digest format, grouped by due date', () => {
+test('digest: one line per task, soonest first', () => {
   assert.equal(buildDigest([
     { kid: 'Ravi', action_line: 'Homework pg 12', due_date: '2026-09-30' },
     { kid: 'Anu', action_line: 'Bring *colour* palette', due_date: '2026-09-29' },
     { kid: 'Anu', action_line: 'Wear yellow dress', due_date: '2026-09-28' },
     { kid: 'Ravi', action_line: 'Pay trip fee', due_date: null, posted: '2026-09-13' },
-    { kid: 'Anu', action_line: 'Bring old newspaper', due_date: '2026-09-30' },
+    { kid: 'Anu', action_line: "Register Anu for the Art Festival with Anu's ID", due_date: '2026-09-30' },
   ], today, '@Partner'), [
-    '@Partner 🎒 *School tasks* · Mon 28 Sep',
-    '',
-    '🔴 *TODAY*',
-    '• *Anu*: Wear yellow dress',
-    '',
-    '🟠 *TOMORROW* · Tue 29 Sep',
-    '• *Anu*: Bring colour palette',
-    '',
-    '📅 *Wed 30 Sep*',
-    '• *Anu*: Bring old newspaper',
-    '• *Ravi*: Homework pg 12',
-    '',
-    '❓ *Date undetermined*',
-    '• *Ravi*: Pay trip fee _(posted Sun 13 Sep)_',
+    '@Partner 🎒 School · Mon 28 Sep',
+    '🔴 Anu: Wear yellow dress · today',
+    '🟠 Anu: Bring colour palette · tomorrow',
+    '📅 Anu: Register for the Art Festival with ID · Wed 30 Sep',
+    '📅 Ravi: Homework pg 12 · Wed 30 Sep',
+    '❓ Ravi: Pay trip fee · no date (posted 13 Sep)',
   ].join('\n'));
   assert.equal(buildDigest([], today, '@Partner'), null);
+});
+
+test('send time: the latest RUN_TIMES slot passed, else yesterday\'s last one', () => {
+  config.runTimes = ['20:00'];
+  assert.equal(currentSlot(new Date('2026-09-30T14:29:00Z')), '2026-09-29 20:00'); // 19:59 IST: still yesterday's slot
+  assert.equal(currentSlot(new Date('2026-09-30T14:30:00Z')), '2026-09-30 20:00'); // 20:00 IST
+  assert.equal(currentSlot(new Date('2026-09-30T19:00:00Z')), '2026-09-30 20:00'); // 00:30 IST next day: retried until 20:00
+  config.runTimes = ['08:00', '20:00'];
+  assert.equal(currentSlot(new Date('2026-09-30T04:00:00Z')), '2026-09-30 08:00');
+  assert.equal(currentSlot(new Date('2026-09-30T02:00:00Z')), '2026-09-29 20:00');
 });
 
 test('first message of the day: full list; later: only new; daily until due, then stops', () => {
@@ -127,7 +129,7 @@ test('first message of the day: full list; later: only new; daily until due, the
   assert.deepEqual(tasksToSend(db, today, true).map((x) => x.action_line), ['Bring old newspaper']); // evening: only the new one
   assert.equal(tasksToSend(db, '2026-09-29', false).length, 2); // next morning: both still due, unclear one not repeated
   assert.equal(tasksToSend(db, '2026-09-30', false).length, 0); // after the due date
-  assert.match(buildDigest(morning, today, '@P', true), /^@P 🆕 \*New school tasks\* · Mon 28 Sep/);
+  assert.match(buildDigest(morning, today, '@P', true), /^@P 🆕 New school tasks · Mon 28 Sep\n/);
 });
 
 // ── sources ──
