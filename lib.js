@@ -251,8 +251,9 @@ export function buildDigest(tasks, today, mention, newOnly = false) {
   };
   const sorted = [...tasks].sort((a, b) => a.kid.localeCompare(b.kid) || (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999'));
   const out = [`${mention} ${newOnly ? '🆕 New school tasks' : '🎒 School'} · ${pretty(today).slice(0, -4)}`];
-  for (const [kid, list] of Map.groupBy(sorted, (t) => t.kid)) out.push(`*${kid}*`, ...list.map(line));
-  return out.join('\n');
+  // A blank line between tasks, so wrapped lines don't run together; the kid's name sits on its first task.
+  for (const [kid, list] of Map.groupBy(sorted, (t) => t.kid)) out.push(...list.map((t, i) => (i ? '' : `*${kid}*\n`) + line(t)));
+  return out.join('\n\n');
 }
 
 // ── text extraction ───────────────────────────────────────────────────────

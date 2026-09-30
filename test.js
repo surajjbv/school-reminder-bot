@@ -99,13 +99,19 @@ test('digest: kid once, then one short-dated line per task', () => {
     { kid: 'Ravi', action_line: 'Send shoebox', due_date: '2026-10-12' },
   ], today, '@Partner'), [
     '@Partner 🎒 School · Mon 28',
+    '',
     '*Anu*',
     '🔴 Today: Wear yellow dress',
+    '',
     '🟠 Tmrw: Bring colour palette',
+    '',
     '• Wed: Register for the Art Festival with ID',
+    '',
     '*Ravi*',
     '• Wed: Homework pg 12',
+    '',
     '• 12 Oct: Send shoebox',
+    '',
     '❓ Pay trip fee (posted 13 Sep)',
   ].join('\n'));
   assert.equal(buildDigest([], today, '@Partner'), null);
@@ -133,7 +139,7 @@ test('first message of the day: full list; later: only new; daily until due, the
   assert.deepEqual(tasksToSend(db, today, true).map((x) => x.action_line), ['Bring old newspaper']); // evening: only the new one
   assert.equal(tasksToSend(db, '2026-09-29', false).length, 2); // next morning: both still due, unclear one not repeated
   assert.equal(tasksToSend(db, '2026-09-30', false).length, 0); // after the due date
-  assert.match(buildDigest(morning, today, '@P', true), /^@P 🆕 New school tasks · Mon 28\n/);
+  assert.match(buildDigest(morning, today, '@P', true), /^@P 🆕 New school tasks · Mon 28\n\n\*Anu\*\n/);
 });
 
 // ── sources ──

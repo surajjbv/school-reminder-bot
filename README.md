@@ -4,8 +4,10 @@
 
 ```
 @Partner 🎒 School · Mon 28
+
 Anu
 🟠 Tmrw: Bring colour palette
+
 Ravi
 • Wed: Homework pg 12
 ```
