@@ -3,9 +3,11 @@
 **One short WhatsApp every evening with every school task that's still due.** No apps to check, no messages missed.
 
 ```
-@Partner 🎒 School · Mon 28 Sep
-🟠 Anu: Bring colour palette · tomorrow
-📅 Ravi: Homework pg 12 · Wed 30 Sep
+@Partner 🎒 School · Mon 28
+Anu
+🟠 Tmrw: Bring colour palette
+Ravi
+• Wed: Homework pg 12
 ```
 
 ## What it does

@@ -232,19 +232,27 @@ export function markSent(db, tasks, today) {
   for (const t of tasks) update.run(today, t.id);
 }
 
-/** WhatsApp message: one line per task, soonest first; the emoji shows how urgent it is. */
+/**
+ * WhatsApp message, made for a narrow phone screen: each kid once in bold, then one line per task,
+ * soonest first, with a short date up front ("Today", "Tmrw", "Fri", "12 Oct") so it isn't lost when
+ * the line wraps. Day-and-month dates are avoided in the header, as WhatsApp underlines them as links.
+ */
 export function buildDigest(tasks, today, mention, newOnly = false) {
   if (!tasks.length) return null;
-  const tomorrow = addDays(today, 1);
   const short = (ymd) => pretty(ymd).slice(4); // '13 Sep'
-  const when = (t) => t.due_date === today ? '🔴|today' : t.due_date === tomorrow ? '🟠|tomorrow' : t.due_date ? `📅|${pretty(t.due_date)}`
-    : `❓|no date${t.posted ? ` (posted ${short(t.posted)})` : ''}`;
-  // The kid's name is already in front, so drop it from the task ("Register Anu for ..." -> "Register for ...").
-  const task = (t) => t.action_line.replace(new RegExp(`\\s*\\b${t.kid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}('s)?\\b`, 'gi'), '').replace(/[*_~`]/g, '').trim();
-  const lines = [...tasks]
-    .sort((a, b) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999') || a.kid.localeCompare(b.kid))
-    .map((t) => { const [icon, date] = when(t).split('|'); return `${icon} ${t.kid}: ${task(t)} · ${date}`; });
-  return [`${mention} ${newOnly ? '🆕 New school tasks' : '🎒 School'} · ${pretty(today)}`, ...lines].join('\n');
+  const line = (t) => {
+    const days = t.due_date && daysBetween(today, t.due_date);
+    const task = t.action_line // the kid's name is the heading: "Register Anu for ..." -> "Register for ..."
+      .replace(new RegExp(`\\s*\\b${t.kid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}('s)?\\b`, 'gi'), '').replace(/[*_~`]/g, '').trim();
+    if (!t.due_date) return `❓ ${task}${t.posted ? ` (posted ${short(t.posted)})` : ''}`;
+    if (days === 0) return `🔴 Today: ${task}`;
+    if (days === 1) return `🟠 Tmrw: ${task}`;
+    return `• ${days < 7 ? pretty(t.due_date).slice(0, 3) : short(t.due_date)}: ${task}`;
+  };
+  const sorted = [...tasks].sort((a, b) => a.kid.localeCompare(b.kid) || (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999'));
+  const out = [`${mention} ${newOnly ? '🆕 New school tasks' : '🎒 School'} · ${pretty(today).slice(0, -4)}`];
+  for (const [kid, list] of Map.groupBy(sorted, (t) => t.kid)) out.push(`*${kid}*`, ...list.map(line));
+  return out.join('\n');
 }
 
 // ── text extraction ───────────────────────────────────────────────────────
