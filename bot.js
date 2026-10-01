@@ -95,6 +95,7 @@ async function main() {
   const db = openDb();
   log.info(`run start ${today} slot ${slot} (send time ${period})`);
   let wa;
+  let modelUsed = 'No model (nothing new)'; // shown at the end of the message
 
   // WhatsApp takes ~15 s to start: warm it up while Gmail/Classroom are read.
   const waStarting = openWhatsApp(db).then((w) => (wa = w), (err) => err);
@@ -115,7 +116,7 @@ async function main() {
 
     log.step(3, items.length ? `Extracting tasks from ${items.length} new item(s) with the local model` : 'No new messages, model not needed');
     if (items.length) {
-      await ensureModel();
+      modelUsed = await ensureModel();
       try {
         for (const [i, item] of items.entries()) {
           log.info(`item ${i + 1}/${items.length}: ${item.kind}, ${item.date}`);
@@ -147,7 +148,7 @@ async function main() {
     log.info(`${tasks.length} task(s) to send (${newOnly ? `only new since the last message for ${period}` : 'full list'})`);
     if (tasks.length && !db.prepare('SELECT 1 FROM sent WHERE day = ? AND slot = ?').get(period, slot)) {
       const mention = await wa.mention();
-      const text = buildDigest(tasks, today, mention.token, newOnly);
+      const text = buildDigest(tasks, today, mention.token, newOnly, modelUsed);
       log.step(5, `Sending to "${config.groupName}"`);
       log.box(`sending to "${config.groupName}"`, text.replace(mention.token, '@' + config.mentionName));
       await wa.sendToGroup(text, mention.id);

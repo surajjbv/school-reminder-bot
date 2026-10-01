@@ -237,7 +237,7 @@ export function markSent(db, tasks, today) {
  * soonest first, with a short date up front ("Today", "Tmrw", "Fri", "12 Oct") so it isn't lost when
  * the line wraps. Day-and-month dates are avoided in the header, as WhatsApp underlines them as links.
  */
-export function buildDigest(tasks, today, mention, newOnly = false) {
+export function buildDigest(tasks, today, mention, newOnly = false, footer = null) {
   if (!tasks.length) return null;
   const short = (ymd) => pretty(ymd).slice(4); // '13 Sep'
   const line = (t) => {
@@ -253,6 +253,7 @@ export function buildDigest(tasks, today, mention, newOnly = false) {
   const out = [`${mention} ${newOnly ? '🆕 New school tasks' : '🎒 School'} · ${pretty(today).slice(0, -4)}`];
   // A blank line between tasks, so wrapped lines don't run together; the kid's name sits on its first task.
   for (const [kid, list] of Map.groupBy(sorted, (t) => t.kid)) out.push(...list.map((t, i) => (i ? '' : `*${kid}*\n`) + line(t)));
+  if (footer) out.push(`🤖 ${footer}`); // which model this run used
   return out.join('\n\n');
 }
 
@@ -321,7 +322,15 @@ const CONTEXT = '16384';
 const lms = async (...a) => (await promisify(execFile)(LMS, a, { encoding: 'utf8' })).stdout;
 let model = null; // { id, key, owned, startedServer }
 
+/** Short model name for the message: 'gemma-4-26b-a4b-it-qat-mlx' -> 'Gemma 4 26B', 'qwen3.5-9b-mlx' -> 'Qwen 3.5 9B'. */
+export function modelLabel(key) {
+  const m = key.split('/').at(-1).match(/^([a-z]+)-?(\d+(?:\.\d+)?)-(\d+b)\b/i);
+  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()} ${m[2]} ${m[3].toUpperCase()}` : key;
+}
+
+/** Loads (or reuses) the model; returns its short name, marked "(fallback)" if MODEL_FALLBACK was used. */
 export async function ensureModel() {
+  const using = (key, fallback, msg) => { log.info(msg); return modelLabel(key) + (fallback ? ' (fallback)' : ''); };
   const startedServer = !JSON.parse(await lms('server', 'status', '--json')).running;
   if (startedServer) await lms('server', 'start');
   const loaded = JSON.parse(await lms('ps', '--json'));
@@ -329,7 +338,7 @@ export async function ensureModel() {
   const leftover = loaded.find((m) => m.identifier === MODEL_ID);
   if (leftover) {
     model = { id: MODEL_ID, key: leftover.modelKey, owned: true, startedServer };
-    return log.info(`model already loaded, reusing it (${leftover.modelKey})`);
+    return using(leftover.modelKey, false, `model already loaded, reusing it (${leftover.modelKey})`);
   }
   const names = [config.model, config.modelFallback].filter(Boolean);
   for (const name of names) {
@@ -337,7 +346,7 @@ export async function ensureModel() {
     const running = loaded.find(matches);
     if (running) {
       model = { id: running.identifier, key: running.modelKey, owned: false, startedServer };
-      return log.info(`model already loaded, reusing it (${running.identifier})`);
+      return using(running.modelKey, name !== config.model, `model already loaded, reusing it (${running.identifier})`);
     }
     const key = JSON.parse(await lms('ls', '--json')).find(matches)?.modelKey;
     if (!key) throw new Error(`Model "${name}" is not downloaded in LM Studio`);
@@ -354,7 +363,7 @@ export async function ensureModel() {
       log.warn(`LM Studio could not load ${key} for lack of memory, trying the fallback`);
       continue;
     }
-    return log.info(`model loaded: ${key}`);
+    return using(key, name !== config.model, `model loaded: ${key}`);
   }
   throw new Error(`Not enough free memory to load ${names.join(' or ')}: close other apps or models`);
 }

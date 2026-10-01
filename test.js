@@ -5,7 +5,7 @@ import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as XLSX from 'xlsx';
 import {
-  buildDigest, config, currentSlot, driveLinks, ensureModel, extractTasks, fileText, isDuplicate,
+  buildDigest, config, currentSlot, driveLinks, ensureModel, modelLabel, extractTasks, fileText, isDuplicate,
   markSent, openDb, parseModelJson, releaseModel, saveTasks, sheetText, tasksToSend, validateTasks,
 } from './lib.js';
 
@@ -115,6 +115,16 @@ test('digest: kid once, then one short-dated line per task', () => {
     '❓ Pay trip fee (posted 13 Sep)',
   ].join('\n'));
   assert.equal(buildDigest([], today, '@Partner'), null);
+  const one = [{ kid: 'Anu', action_line: 'Bring apron', due_date: '2026-10-01' }];
+  assert.match(buildDigest(one, today, '@P', false, 'Gemma 4 26B'), /• Thu: Bring apron\n\n🤖 Gemma 4 26B$/);
+  assert.ok(!buildDigest(one, today, '@P').includes('🤖'));
+});
+
+test('model: short name for the message', () => {
+  assert.equal(modelLabel('gemma-4-26b-a4b-it-qat-mlx'), 'Gemma 4 26B');
+  assert.equal(modelLabel('qwen3.5-9b-mlx'), 'Qwen 3.5 9B');
+  assert.equal(modelLabel('lmstudio-community/Qwen3.6-35B-A3B-MLX-4bit'), 'Qwen 3.6 35B');
+  assert.equal(modelLabel('mistral-small'), 'mistral-small'); // unknown pattern: as is
 });
 
 test('send time: the latest RUN_TIMES slot passed, else yesterday\'s last one', () => {

@@ -10,6 +10,8 @@ Anu
 
 Ravi
 • Wed: Homework pg 12
+
+🤖 Gemma 4 26B
 ```
 
 ## What it does
