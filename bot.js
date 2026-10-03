@@ -34,24 +34,26 @@ async function collectSchool(db, today) {
   const remember = db.prepare('INSERT OR REPLACE INTO watched (id, modified, first_seen) VALUES (?, ?, COALESCE((SELECT first_seen FROM watched WHERE id = ?), ?))');
   async function withFiles(text, ids) {
     const queue = [...new Set(ids)];
+    const docs = []; // files actually read, kept with the tasks so later edits can correct their dates
     for (const id of queue) {
       const f = await read(id);
       if (!f) continue;
+      docs.push(id);
       text += `\n\n[Attached: ${f.name}]\n${f.text}`;
       remember.run(id, f.modified, id, today);
       for (const l of f.links) if (l.kind !== 'file' && !queue.includes(l.id) && queue.length < ids.length + MAX_NESTED) queue.push(l.id);
     }
-    return text;
+    return { text, docs };
   }
 
   const items = await Promise.all([
     ...newMails.map(async (m) => ({
       sourceId: `gmail:${m.id}`, kid: config.emailKid, kind: 'school email', date: m.date, markIds: [`gmail:${m.id}`],
-      text: await withFiles(`Subject: ${m.subject}\nFrom: ${m.from}\n\n${m.text}`, m.links.map((l) => l.id)),
+      ...await withFiles(`Subject: ${m.subject}\nFrom: ${m.from}\n\n${m.text}`, m.links.map((l) => l.id)),
     })),
     ...newPosts.map(async (p) => ({
       sourceId: `cls:${p.id}`, kid: config.emailKid, kind: p.kind, date: p.date, markIds: [`cls:${p.id}:${p.ms}`],
-      text: await withFiles(p.text, p.driveIds),
+      ...await withFiles(p.text, p.driveIds),
     })),
   ]);
 
@@ -63,7 +65,7 @@ async function collectSchool(db, today) {
     const editId = `drive:${w.id}:${modified}`;
     if (modified === w.modified || isProcessed(db, editId)) continue;
     const f = await read(w.id);
-    if (f) items.push({ sourceId: editId, kid: config.emailKid, kind: 'edited school document', date: today, text: `[${f.name}]\n${f.text}`, markIds: [editId] });
+    if (f) items.push({ sourceId: editId, kid: config.emailKid, kind: 'edited school document', date: today, text: `[${f.name}]\n${f.text}`, markIds: [editId], docs: [w.id], editedDoc: w.id });
   }
 
   const newest = (list, fallback) => Math.max(fallback, ...list.map((x) => x.ms));
@@ -124,7 +126,7 @@ async function main() {
           if (raw) {
             const { ok, dropped } = validateTasks(raw, { kid: item.kid, sourceId: item.sourceId, today, sourceText: item.text, posted: item.date });
             dropped.forEach((d) => log.info(`dropped from ${item.sourceId}: "${d.t?.action_line}" (${d.why})`));
-            log.info(`${item.sourceId}: ${ok.length} task(s), ${saveTasks(db, ok, today)} new`);
+            log.info(`${item.sourceId}: ${ok.length} task(s), ${saveTasks(db, ok, today, item)} new`);
           } else {
             // Unreadable model reply: retry on the next runs; give up (logged) after 3 attempts.
             const tries = Number(kvGet(db, `tries:${item.sourceId}`) || 0) + 1;

@@ -152,6 +152,23 @@ test('first message of the day: full list; later: only new; daily until due, the
   assert.match(buildDigest(morning, today, '@P', true), /^@P 🆕 New school tasks · Mon 28\n\n\*Anu\*\n/);
 });
 
+test('edited document: a changed date updates the task instead of adding a copy', () => {
+  const db = openDb(':memory:');
+  const t = (action_line, due_date, source_id) => ({ kid: 'Anu', action_line, due_date, date_unclear: 0, confidence: 1, source_id });
+  // Classroom post with the weekly Sheet (D) and another file (E) attached.
+  saveTasks(db, [t('Bring logsheets for review', '2026-10-04', 'cls:1'), t('Write Cursive d and g', '2026-10-05', 'cls:1'),
+    t('Bring dandiya sticks', '2026-10-09', 'cls:1')], today, { docs: ['D', 'E'] });
+  // The teacher corrects two dates in D; the edited Sheet is re-read.
+  saveTasks(db, [t('Kindly bring your logsheets for review', '2026-10-05', 'drive:D:2'), t('Write Cursive d and g', '2026-10-06', 'drive:D:2')],
+    today, { docs: ['D'], editedDoc: 'D' });
+  const rows = () => db.prepare('SELECT action_line, due_date FROM tasks ORDER BY due_date').all().map((x) => `${x.due_date} ${x.action_line}`);
+  assert.deepEqual(rows(), ['2026-10-05 Bring logsheets for review', '2026-10-06 Write Cursive d and g', '2026-10-09 Bring dandiya sticks']);
+  // Next week's tab is added while this week's tasks are still upcoming: both weeks are kept.
+  saveTasks(db, [t('Bring logsheets for review', '2026-10-05', 'drive:D:3'), t('Bring logsheets for review', '2026-10-12', 'drive:D:3')],
+    today, { docs: ['D'], editedDoc: 'D' });
+  assert.deepEqual(rows().filter((r) => /logsheets/.test(r)), ['2026-10-05 Bring logsheets for review', '2026-10-12 Bring logsheets for review']);
+});
+
 // ── sources ──
 test('email: finds Drive links', () => {
   assert.deepEqual(driveLinks(EMAIL), [{ id: '1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789', kind: 'sheet' }]);

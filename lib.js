@@ -106,10 +106,11 @@ export function openDb(file = path.join(DATA, 'bot.db')) {
     CREATE TABLE IF NOT EXISTS watched (id TEXT PRIMARY KEY, modified TEXT, first_seen TEXT); -- attached Sheets/Docs re-checked for edits
     CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY, kid TEXT, action_line TEXT, due_date TEXT,
-      date_unclear INTEGER DEFAULT 0, last_sent TEXT, confidence REAL, source_id TEXT, first_seen TEXT, posted TEXT);
+      date_unclear INTEGER DEFAULT 0, last_sent TEXT, confidence REAL, source_id TEXT, first_seen TEXT, posted TEXT,
+      docs TEXT); -- Drive files the task was read from (',id1,id2,')
     CREATE TABLE IF NOT EXISTS sent (id INTEGER PRIMARY KEY, day TEXT, slot TEXT, text TEXT, at TEXT);
   `);
-  try { db.exec('ALTER TABLE tasks ADD COLUMN posted TEXT'); } catch { /* already there */ } // databases from before 'posted'
+  for (const col of ['posted', 'docs']) try { db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`); } catch { /* already there */ } // older databases
   return db;
 }
 export const kvGet = (db, k) => db.prepare('SELECT value FROM kv WHERE key = ?').get(k)?.value;
@@ -203,13 +204,29 @@ function similar(a, b) {
 export const isDuplicate = (t, existing) =>
   existing.some((x) => x.kid === t.kid && (x.due_date ?? null) === (t.due_date ?? null) && similar(x.action_line, t.action_line));
 
-export function saveTasks(db, tasks, today) {
-  const existing = db.prepare('SELECT kid, action_line, due_date FROM tasks').all();
-  const insert = db.prepare('INSERT INTO tasks (kid, action_line, due_date, date_unclear, confidence, source_id, first_seen, posted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+/**
+ * Store new tasks, skipping duplicates. `docs`: Drive files the tasks were read from. `editedDoc`: the
+ * tasks come from re-reading that file after an edit; an upcoming task read from it earlier whose date
+ * the file no longer gives is the same task with a corrected date, so its date is updated, not copied.
+ */
+export function saveTasks(db, tasks, today, { docs = [], editedDoc = null } = {}) {
+  const existing = db.prepare('SELECT id, kid, action_line, due_date FROM tasks').all();
+  const insert = db.prepare('INSERT INTO tasks (kid, action_line, due_date, date_unclear, confidence, source_id, first_seen, posted, docs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  // Earlier tasks from the edited file that none of the new tasks repeats with the same date.
+  const stale = !editedDoc ? [] : db.prepare("SELECT * FROM tasks WHERE docs LIKE ? AND (due_date >= ? OR due_date IS NULL)")
+    .all(`%,${editedDoc},%`, today).filter((x) => !isDuplicate(x, tasks));
   let added = 0;
   for (const t of tasks) {
     if (isDuplicate(t, existing)) continue;
-    insert.run(t.kid, t.action_line, t.due_date, t.date_unclear, t.confidence, t.source_id, today, t.posted ?? null);
+    const old = stale.find((x) => x.kid === t.kid && similar(x.action_line, t.action_line));
+    if (old) {
+      stale.splice(stale.indexOf(old), 1);
+      db.prepare('UPDATE tasks SET due_date = ?, date_unclear = ?, source_id = ? WHERE id = ?').run(t.due_date, t.date_unclear, t.source_id, old.id);
+      existing.find((x) => x.id === old.id).due_date = t.due_date;
+      log.info(`date changed in ${editedDoc}: "${old.action_line}" ${old.due_date ?? 'undetermined'} -> ${t.due_date ?? 'undetermined'}`);
+      continue;
+    }
+    insert.run(t.kid, t.action_line, t.due_date, t.date_unclear, t.confidence, t.source_id, today, t.posted ?? null, docs.length ? `,${docs.join(',')},` : null);
     existing.push(t);
     added++;
   }
