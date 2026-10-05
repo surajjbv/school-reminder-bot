@@ -1,28 +1,30 @@
 // One run: read new school items -> extract tasks with the local model -> send today's reminder -> exit.
-// Usage: node bot.js [--slot HH:MM]
-import { execFileSync } from 'node:child_process';
-import {
-  addDays, buildDigest, config, currentSlot, ensureModel, extractTasks, isProcessed, istDate, istTime,
-  kvGet, kvSet, log, markProcessed, openDb, releaseModel, requireConfig, markSent, saveTasks, tasksToSend, validateTasks,
-} from './lib.js';
-import { classroomPosts, driveModified, driveText, fetchSchoolMails, openWhatsApp, WhatsAppLoggedOut } from './sources.js';
+//   npm start                  run now (scheduled runs get the slot from kit/schedule.sh)
+//   npm run dry                everything except sending; nothing is saved
+//   npm run login [-- google|whatsapp]   one-time logins (both by default)
+//   add -- --slot "YYYY-MM-DD HH:MM" to run as that send time
+import { currentSlot } from './kit/config.js';
+import { googleLogin } from './kit/google.js';
+import * as llm from './kit/llm.js';
+import { runBot } from './kit/run.js';
+import { addDays, buildDigest, extractTasks, istDate, istTime, markSent, saveTasks, SCHEMA, tasksToSend, validateTasks } from './rules.js';
+import { classroomPosts, driveModified, driveText, fetchSchoolMails, SCOPES } from './sources/google.js';
+import { schoolWhatsApp } from './sources/whatsapp.js';
 
-const args = process.argv.slice(2);
-const slot = args.includes('--slot') ? args[args.indexOf('--slot') + 1] : currentSlot(); // schedule.sh passes the slot, run-now 'manual-...'
-const period = /^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(slot) ? slot : currentSlot(); // the send time this run belongs to, e.g. '2026-09-29 20:00'
 const WATCH_DAYS = 14; // re-check attached Sheets/Docs this long for edits
 const MAX_NESTED = 5;
 const RETRY_WINDOW = 3 * 864e5;
 
 /** New school emails and Classroom posts (with attached Drive files), plus edits to recently seen Sheets/Docs. */
-async function collectSchool(db, today) {
-  const since = (key, days) => Number(kvGet(db, key) || Date.now() - days * 864e5);
-  const mailSince = since('gmail_last_ms', config.emailLookbackDays);
-  const postSince = since('classroom_last_ms', config.emailLookbackDays);
+async function collectSchool({ cfg, env, store, log }, today) {
+  const { db } = store;
+  const since = (key, days) => Number(store.get(key) || Date.now() - days * 864e5);
+  const mailSince = since('gmail_last_ms', cfg.emailLookbackDays);
+  const postSince = since('classroom_last_ms', cfg.emailLookbackDays);
   // Look 3 days behind the markers so items whose extraction failed are retried (processed ones are skipped).
   const [mails, posts] = await Promise.all([fetchSchoolMails(mailSince - RETRY_WINDOW), classroomPosts(postSince - RETRY_WINDOW)]);
-  const newMails = mails.filter((m) => !isProcessed(db, `gmail:${m.id}`));
-  const newPosts = posts.filter((p) => !isProcessed(db, `cls:${p.id}:${p.ms}`));
+  const newMails = mails.filter((m) => !store.isProcessed(`gmail:${m.id}`));
+  const newPosts = posts.filter((p) => !store.isProcessed(`cls:${p.id}:${p.ms}`));
   log.info(`gmail: ${newMails.length} new school mail(s); classroom: ${newPosts.length} new post(s)`);
 
   // Each Drive file is read once per run; Docs often link to the real homework Sheet, so follow a few.
@@ -46,13 +48,14 @@ async function collectSchool(db, today) {
     return { text, docs };
   }
 
+  const kid = env.EMAIL_KID_NAME;
   const items = await Promise.all([
     ...newMails.map(async (m) => ({
-      sourceId: `gmail:${m.id}`, kid: config.emailKid, kind: 'school email', date: m.date, markIds: [`gmail:${m.id}`],
+      sourceId: `gmail:${m.id}`, kid, kind: 'school email', date: m.date, markIds: [`gmail:${m.id}`],
       ...await withFiles(`Subject: ${m.subject}\nFrom: ${m.from}\n\n${m.text}`, m.links.map((l) => l.id)),
     })),
     ...newPosts.map(async (p) => ({
-      sourceId: `cls:${p.id}`, kid: config.emailKid, kind: p.kind, date: p.date, markIds: [`cls:${p.id}:${p.ms}`],
+      sourceId: `cls:${p.id}`, kid, kind: p.kind, date: p.date, markIds: [`cls:${p.id}:${p.ms}`],
       ...await withFiles(p.text, p.driveIds),
     })),
   ]);
@@ -63,123 +66,131 @@ async function collectSchool(db, today) {
     if (cache.has(w.id)) continue;
     const modified = await driveModified(w.id).catch(() => w.modified);
     const editId = `drive:${w.id}:${modified}`;
-    if (modified === w.modified || isProcessed(db, editId)) continue;
+    if (modified === w.modified || store.isProcessed(editId)) continue;
     const f = await read(w.id);
-    if (f) items.push({ sourceId: editId, kid: config.emailKid, kind: 'edited school document', date: today, text: `[${f.name}]\n${f.text}`, markIds: [editId], docs: [w.id], editedDoc: w.id });
+    if (f) items.push({ sourceId: editId, kid, kind: 'edited school document', date: today, text: `[${f.name}]\n${f.text}`, markIds: [editId], docs: [w.id], editedDoc: w.id });
   }
 
   const newest = (list, fallback) => Math.max(fallback, ...list.map((x) => x.ms));
   return {
     items,
-    commit: () => { kvSet(db, 'gmail_last_ms', newest(mails, mailSince)); kvSet(db, 'classroom_last_ms', newest(posts, postSince)); },
+    commit: () => { store.set('gmail_last_ms', newest(mails, mailSince)); store.set('classroom_last_ms', newest(posts, postSince)); },
   };
 }
 
-async function collectTeacherChat(db, wa) {
-  const since = Number(kvGet(db, 'wa_last_ts') || Math.floor(Date.now() / 1000) - config.whatsappLookbackDays * 86400);
+async function collectTeacherChat({ cfg, env, store, log }, wa) {
+  const since = Number(store.get('wa_last_ts') || Math.floor(Date.now() / 1000) - cfg.whatsappLookbackDays * 86400);
   // Look behind the marker too, so a day whose extraction failed is retried (processed messages are skipped).
-  const msgs = (await wa.readTeacherMessages(since - RETRY_WINDOW / 1000)).filter((m) => !isProcessed(db, `wa:${m.id}`));
-  log.info(`whatsapp: ${msgs.length} new message(s) from ${config.teacherChat}`);
+  const msgs = (await wa.readTeacherMessages(since - RETRY_WINDOW / 1000)).filter((m) => !store.isProcessed(`wa:${m.id}`));
+  log.info(`whatsapp: ${msgs.length} new message(s) from ${env.TEACHER_CHAT_NAME}`);
   // One model call per day of messages, so captions and follow-ups keep their context.
   const byDay = Map.groupBy(msgs, (m) => istDate(m.ts * 1000));
   const items = [...byDay].map(([day, ms]) => ({
-    sourceId: `wa:${ms[0].id}`, kid: config.chatKid, kind: 'teacher WhatsApp messages', date: day,
+    sourceId: `wa:${ms[0].id}`, kid: env.CHAT_KID_NAME, kind: 'teacher WhatsApp messages', date: day,
     text: ms.map((m) => `[${istTime(m.ts * 1000)}] ${m.text}`).join('\n\n'),
     markIds: ms.map((m) => `wa:${m.id}`),
   }));
   const newest = Math.max(since, ...msgs.map((m) => m.ts));
-  return { items, commit: () => kvSet(db, 'wa_last_ts', newest) };
+  return { items, commit: () => store.set('wa_last_ts', newest) };
 }
 
-async function main() {
-  requireConfig('emailKid', 'chatKid', 'teacherChat', 'groupName', 'mentionName');
-  const today = istDate();
-  const db = openDb();
-  log.info(`run start ${today} slot ${slot} (send time ${period})`);
-  let wa;
-  let modelUsed = 'No model (nothing new)'; // shown at the end of the message
-
-  // WhatsApp takes ~15 s to start: warm it up while Gmail/Classroom are read.
-  const waStarting = openWhatsApp(db).then((w) => (wa = w), (err) => err);
-  try {
-    log.step(1, `Checking ${config.emailKid}'s school email and Classroom`);
-    const school = await collectSchool(db, today);
-
-    log.step(2, `Reading ${config.teacherChat} on WhatsApp`);
-    const waResult = await waStarting;
-    if (waResult instanceof Error) {
-      if (waResult instanceof WhatsAppLoggedOut) {
-        try { execFileSync('osascript', ['-e', 'display notification "Run: npm run login:whatsapp" with title "School bot: WhatsApp unlinked"']); } catch { /* no GUI */ }
-      }
-      throw waResult;
+runBot({
+  name: 'school-reminder-bot',
+  root: import.meta.dirname,
+  defaults: {
+    runTimes: ['20:00'], // several: later ones send only tasks not yet sent that day
+    emailLookbackDays: 14, // how far back the very first run reads; later runs read everything since the last run
+    whatsappLookbackDays: 14,
+  },
+  env: ['EMAIL_KID_NAME', 'CHAT_KID_NAME', 'TEACHER_CHAT_NAME', 'GROUP_NAME', 'MENTION_NAME'],
+  optionalEnv: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REFRESH_TOKEN', 'SCHOOL_GMAIL_QUERY', 'MENTION_NUMBER_ENDS_WITH'],
+  schema: SCHEMA,
+  async main(ctx) {
+    const { cfg, env, store, log, dry, args } = ctx;
+    if (args.includes('--login')) {
+      const what = args[args.indexOf('--login') + 1];
+      if (what !== 'whatsapp') await googleLogin(cfg.root, SCOPES, "the kid's school Google account");
+      if (what !== 'google') await (await schoolWhatsApp({ cfg, env, store, login: true })).close();
+      return log.done('logged in');
     }
-    const chat = await collectTeacherChat(db, wa);
-    const items = [...school.items, ...chat.items];
+    const argSlot = args.includes('--slot') ? args[args.indexOf('--slot') + 1] : null;
+    const slot = argSlot ?? process.env.BOT_SLOT ?? `manual-${new Date().toTimeString().slice(0, 8).replace(/:/g, '')}`;
+    // The send time this run belongs to, e.g. '2026-09-29 20:00'.
+    const period = /^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(slot) ? slot : currentSlot(cfg.runTimes, cfg.timezone);
+    const today = istDate();
+    const { db } = store;
+    log.info(`run ${today} slot ${slot} (send time ${period})`);
+    let wa;
+    let modelUsed = 'No model (nothing new)'; // shown at the end of the message
 
-    log.step(3, items.length ? `Extracting tasks from ${items.length} new item(s) with the local model` : 'No new messages, model not needed');
-    if (items.length) {
-      modelUsed = await ensureModel();
-      try {
+    // WhatsApp takes ~15 s to start: warm it up while Gmail/Classroom are read.
+    const waStarting = schoolWhatsApp({ cfg, env, store }).then((w) => (wa = w), (err) => err);
+    try {
+      // collect
+      log.step(`[1/5] Checking ${env.EMAIL_KID_NAME}'s school email and Classroom`);
+      const school = await collectSchool(ctx, today);
+      log.step(`[2/5] Reading ${env.TEACHER_CHAT_NAME} on WhatsApp`);
+      const waResult = await waStarting;
+      if (waResult instanceof Error) throw waResult;
+      const chat = await collectTeacherChat(ctx, wa);
+      const items = [...school.items, ...chat.items];
+
+      // decide
+      log.step(items.length ? `[3/5] Extracting tasks from ${items.length} new item(s) with the local model` : '[3/5] No new messages, model not needed');
+      if (items.length) {
+        await llm.acquire();
+        modelUsed = llm.label(cfg.model);
         for (const [i, item] of items.entries()) {
           log.info(`item ${i + 1}/${items.length}: ${item.kind}, ${item.date}`);
-          const raw = await extractTasks(item, today);
+          const raw = await extractTasks(item, today, llm.ask);
           if (raw) {
             const { ok, dropped } = validateTasks(raw, { kid: item.kid, sourceId: item.sourceId, today, sourceText: item.text, posted: item.date });
             dropped.forEach((d) => log.info(`dropped from ${item.sourceId}: "${d.t?.action_line}" (${d.why})`));
             log.info(`${item.sourceId}: ${ok.length} task(s), ${saveTasks(db, ok, today, item)} new`);
           } else {
-            // Unreadable model reply: retry on the next runs; give up (logged) after 3 attempts.
-            const tries = Number(kvGet(db, `tries:${item.sourceId}`) || 0) + 1;
-            kvSet(db, `tries:${item.sourceId}`, tries);
+            // Unusable model reply: retry on the next runs; give up (logged) after 3 attempts.
+            const tries = Number(store.get(`tries:${item.sourceId}`) || 0) + 1;
+            store.set(`tries:${item.sourceId}`, tries);
             if (tries < 3) { log.warn(`${item.sourceId}: will retry next run (attempt ${tries}/3)`); continue; }
             log.error(`${item.sourceId}: gave up after 3 attempts`);
           }
-          item.markIds.forEach((id) => markProcessed(db, id));
+          item.markIds.forEach((id) => store.markProcessed(id));
         }
-      } finally {
-        releaseModel();
+        llm.release();
       }
-    }
-    school.commit();
-    chat.commit();
+      school.commit();
+      chat.commit();
 
-    log.step(4, "Building today's reminder");
-    // sent.day holds the send time a message belongs to. Already messaged for it (e.g. by run-now)? Then only new tasks.
-    const newOnly = !!db.prepare('SELECT 1 FROM sent WHERE day = ?').get(period);
-    const tasks = tasksToSend(db, today, newOnly);
-    log.info(`${tasks.length} task(s) to send (${newOnly ? `only new since the last message for ${period}` : 'full list'})`);
-    if (tasks.length && !db.prepare('SELECT 1 FROM sent WHERE day = ? AND slot = ?').get(period, slot)) {
-      const mention = await wa.mention();
-      const text = buildDigest(tasks, today, mention.token, newOnly, modelUsed);
-      log.step(5, `Sending to "${config.groupName}"`);
-      log.box(`sending to "${config.groupName}"`, text.replace(mention.token, '@' + config.mentionName));
-      await wa.sendToGroup(text, mention.id);
-      db.prepare('INSERT INTO sent (day, slot, text, at) VALUES (?, ?, ?, ?)').run(period, slot, text, new Date().toISOString());
-      markSent(db, tasks, today);
-      log.sent(`${config.groupName}: ${text.replace(/\n/g, ' | ')}`);
-    } else {
-      log.step(5, 'Nothing to send');
-      log.info(tasks.length ? `slot ${slot} already sent` : newOnly ? 'nothing new since the last message' : 'no tasks today, nothing sent');
-    }
-  } catch (err) {
-    // Tell the user without them having to read logs: WhatsApp to self, else a macOS notification.
-    // Scheduled runs retry every few minutes, so only the first failure per send time is messaged.
-    const text = `School reminder bot FAILED during ${log.currentStep()}: ${err.message}. It keeps retrying until sent. Details: data/bot.log`;
-    if (kvGet(db, 'alerted') !== period) {
-      kvSet(db, 'alerted', period);
-      try { await wa.sendToSelf(text); } catch {
-        try { execFileSync('osascript', ['-e', `display notification ${JSON.stringify(err.message)} with title "School reminder bot failed"`]); } catch { /* no GUI */ }
+      log.step("[4/5] Building today's reminder");
+      // sent.day holds the send time a message belongs to. Already messaged for it (e.g. by a manual run)? Then only new tasks.
+      const newOnly = !!db.prepare('SELECT 1 FROM sent WHERE day = ?').get(period);
+      const tasks = tasksToSend(db, today, newOnly);
+      log.info(`${tasks.length} task(s) to send (${newOnly ? `only new since the last message for ${period}` : 'full list'})`);
+      if (tasks.length && !db.prepare('SELECT 1 FROM sent WHERE day = ? AND slot = ?').get(period, slot)) {
+        // act
+        const mention = await wa.mention();
+        const text = buildDigest(tasks, today, mention.token, newOnly, modelUsed);
+        log.step(`[5/5] ${dry ? 'Would send' : 'Sending'} to "${env.GROUP_NAME}"`);
+        log.box(`${dry ? 'would send' : 'sending'} to "${env.GROUP_NAME}"`, text.replace(mention.token, '@' + env.MENTION_NAME));
+        if (!dry) {
+          await wa.sendToGroup(text, mention.id);
+          db.prepare('INSERT INTO sent (day, slot, text, at) VALUES (?, ?, ?, ?)').run(period, slot, text, new Date().toISOString());
+          markSent(db, tasks, today);
+          log.done(`${env.GROUP_NAME}: ${text.replace(/\n/g, ' | ')}`);
+        }
+      } else {
+        log.step('[5/5] Nothing to send');
+        log.info(tasks.length ? `slot ${slot} already sent` : newOnly ? 'nothing new since the last message' : 'no tasks today, nothing sent');
       }
+    } catch (err) {
+      // Also tell the user on WhatsApp (to self). Scheduled runs retry, so only the first failure per send time.
+      if (!dry && !(err instanceof llm.ModelBusy) && store.get('alerted') !== period) {
+        store.set('alerted', period);
+        await wa?.sendToSelf(`School reminder bot FAILED during ${log.currentStep}: ${err.message}. It keeps retrying until sent. Details: data/bot.log`).catch(() => {});
+      }
+      throw err;
+    } finally {
+      await (wa ?? (await waStarting))?.close?.();
     }
-    throw err;
-  } finally {
-    await (wa ?? (await waStarting))?.close?.();
-    db.close();
-  }
-  log.info('run done');
-}
-
-// Log anything that would otherwise end the run silently; the exit handler then unloads the model.
-for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => { log.error(`run interrupted by ${sig}`); process.exit(130); });
-process.on('unhandledRejection', (err) => { log.failed(err); process.exit(1); });
-main().then(() => process.exit(0), (err) => { log.failed(err); process.exit(1); });
+  },
+});

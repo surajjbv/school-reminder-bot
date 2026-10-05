@@ -1,13 +1,14 @@
 // Task rules, sample email / sheet / image, and the model step.
-// The model is stubbed; LIVE=1 npm test uses the real LM Studio model.
+// The model is stubbed; LIVE=1 npm test uses the real LM Studio model (through the kit's lease).
 import assert from 'node:assert/strict';
-import { after, before, test } from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
+import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as XLSX from 'xlsx';
-import {
-  buildDigest, config, currentSlot, driveLinks, ensureModel, modelLabel, extractTasks, fileText, isDuplicate,
-  markSent, openDb, parseModelJson, releaseModel, saveTasks, sheetText, tasksToSend, validateTasks,
-} from './lib.js';
+import { currentSlot } from './kit/config.js';
+import * as llm from './kit/llm.js';
+import { buildDigest, extractTasks, isDuplicate, markSent, saveTasks, SCHEMA, tasksToSend, validateTasks } from './rules.js';
+import { driveLinks, fileText, sheetText } from './sources/text.js';
 
 const LIVE = process.env.LIVE === '1';
 const today = '2026-09-28'; // a Monday
@@ -27,26 +28,18 @@ function sampleSheet() {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Event', 'Date'], ['Sports Day', '10/10/2026']]), 'Events');
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
+const openDb = () => { const db = new DatabaseSync(':memory:'); db.exec(SCHEMA); return db; };
 
-// Stub LM Studio with canned replies (LIVE=1 uses the real model).
+// Stub of kit ask() with canned replies: an object, or a string standing for an unusable reply (LIVE=1: the real model).
 let replies = [];
-const realFetch = globalThis.fetch;
-before(async () => {
-  if (LIVE) return ensureModel();
-  globalThis.fetch = async () => {
-    const text = replies.shift(); // both reply shapes: /v1/completions (Qwen) and /v1/chat/completions (others)
-    return { ok: true, json: async () => ({ choices: [{ text, message: { content: text } }] }) };
-  };
-});
-after(() => { if (LIVE) releaseModel(); else globalThis.fetch = realFetch; });
+const ask = LIVE ? llm.ask : async () => {
+  const r = replies.shift();
+  if (typeof r === 'string') throw new llm.BadReply('model reply is not JSON');
+  return r;
+};
+after(() => llm.release());
 
 // ── task rules ──
-test('parses JSON wrapped in chatter or code fences', () => {
-  assert.equal(parseModelJson('Sure!\n```json\n{"tasks":[{"action_line":"Bring colour palette"}]}\n```')[0].action_line, 'Bring colour palette');
-  assert.throws(() => parseModelJson('no json here'));
-  assert.throws(() => parseModelJson('{"items":[]}'));
-});
-
 test('validation: past, too far, unclear, low confidence, long lines', () => {
   const { ok, dropped } = validateTasks([
     { action_line: 'Bring colour palette.', due_date: '2026-09-29', confidence: 0.9 },
@@ -121,24 +114,24 @@ test('digest: kid once, then one short-dated line per task', () => {
 });
 
 test('model: short name for the message', () => {
-  assert.equal(modelLabel('gemma-4-26b-a4b-it-qat-mlx'), 'Gemma 4 26B');
-  assert.equal(modelLabel('qwen3.5-9b-mlx'), 'Qwen 3.5 9B');
-  assert.equal(modelLabel('lmstudio-community/Qwen3.6-35B-A3B-MLX-4bit'), 'Qwen 3.6 35B');
-  assert.equal(modelLabel('mistral-small'), 'mistral-small'); // unknown pattern: as is
+  assert.equal(llm.label('qwen3.8-27b-mlx'), 'Qwen 3.8 27B');
+  assert.equal(llm.label('gemma-4-26b-a4b-it-qat-mlx'), 'Gemma 4 26B');
+  assert.equal(llm.label('qwen3.5-9b-mlx'), 'Qwen 3.5 9B');
+  assert.equal(llm.label('lmstudio-community/Qwen3.6-35B-A3B-MLX-4bit'), 'Qwen 3.6 35B');
+  assert.equal(llm.label('mistral-small'), 'mistral-small'); // unknown pattern: as is
 });
 
-test('send time: the latest RUN_TIMES slot passed, else yesterday\'s last one', () => {
-  config.runTimes = ['20:00'];
-  assert.equal(currentSlot(new Date('2026-09-30T14:29:00Z')), '2026-09-29 20:00'); // 19:59 IST: still yesterday's slot
-  assert.equal(currentSlot(new Date('2026-09-30T14:30:00Z')), '2026-09-30 20:00'); // 20:00 IST
-  assert.equal(currentSlot(new Date('2026-09-30T19:00:00Z')), '2026-09-30 20:00'); // 00:30 IST next day: retried until 20:00
-  config.runTimes = ['08:00', '20:00'];
-  assert.equal(currentSlot(new Date('2026-09-30T04:00:00Z')), '2026-09-30 08:00');
-  assert.equal(currentSlot(new Date('2026-09-30T02:00:00Z')), '2026-09-29 20:00');
+test('send time: the latest runTimes slot passed, else yesterday\'s last one', () => {
+  const slot = (times, iso) => currentSlot(times, 'Asia/Kolkata', new Date(iso));
+  assert.equal(slot(['20:00'], '2026-09-30T14:29:00Z'), '2026-09-29 20:00'); // 19:59 IST: still yesterday's slot
+  assert.equal(slot(['20:00'], '2026-09-30T14:30:00Z'), '2026-09-30 20:00'); // 20:00 IST
+  assert.equal(slot(['20:00'], '2026-09-30T19:00:00Z'), '2026-09-30 20:00'); // 00:30 IST next day
+  assert.equal(slot(['08:00', '20:00'], '2026-09-30T04:00:00Z'), '2026-09-30 08:00');
+  assert.equal(slot(['08:00', '20:00'], '2026-09-30T02:00:00Z'), '2026-09-29 20:00');
 });
 
 test('first message of the day: full list; later: only new; daily until due, then stops', () => {
-  const db = openDb(':memory:');
+  const db = openDb();
   const t = { kid: 'Anu', action_line: 'Bring colour palette', due_date: '2026-09-29', date_unclear: 0, confidence: 1, source_id: 'x' };
   saveTasks(db, [t, { ...t, source_id: 'y' }, { kid: 'Ravi', action_line: 'Pay trip fee', due_date: null, date_unclear: 1, confidence: 1, source_id: 'z' }], today);
   const morning = tasksToSend(db, today, false);
@@ -153,7 +146,7 @@ test('first message of the day: full list; later: only new; daily until due, the
 });
 
 test('edited document: a changed date updates the task instead of adding a copy', () => {
-  const db = openDb(':memory:');
+  const db = openDb();
   const t = (action_line, due_date, source_id) => ({ kid: 'Anu', action_line, due_date, date_unclear: 0, confidence: 1, source_id });
   // Classroom post with the weekly Sheet (D) and another file (E) attached.
   saveTasks(db, [t('Bring logsheets for review', '2026-10-04', 'cls:1'), t('Write Cursive d and g', '2026-10-05', 'cls:1'),
@@ -196,28 +189,28 @@ test('image: macOS Vision OCR reads the notice', () => {
 });
 
 // ── model step ──
-const run = (kid, kind, date, text) => extractTasks({ sourceId: 't', kid, kind, date, text }, date);
+const run = (kid, kind, date, text) => extractTasks({ sourceId: 't', kid, kind, date, text }, date, ask);
 
 test('model: email -> task', async () => {
-  replies = ['{"tasks":[{"action_line":"Send child dressed in yellow with yellow object","due_date":"2026-09-29","confidence":0.95}]}'];
+  replies = [{"tasks":[{"action_line":"Send child dressed in yellow with yellow object","due_date":"2026-09-29","confidence":0.95}]}];
   const { ok } = validateTasks(await run('Anu', 'school email', today, EMAIL), { kid: 'Anu', sourceId: 't', today });
   assert.ok(ok.some((t) => /yellow/i.test(t.action_line) && t.due_date === '2026-09-29'), JSON.stringify(ok));
 });
 
 test('model: sheet -> tasks from several tabs', async () => {
-  replies = ['{"tasks":[{"action_line":"Write letters A to E twice","due_date":"2026-09-29","confidence":0.9},{"action_line":"Bring empty shoebox for craft","due_date":"2026-09-30","confidence":0.9}]}'];
+  replies = [{"tasks":[{"action_line":"Write letters A to E twice","due_date":"2026-09-29","confidence":0.9},{"action_line":"Bring empty shoebox for craft","due_date":"2026-09-30","confidence":0.9}]}];
   const { ok } = validateTasks(await run('Anu', 'school spreadsheet', today, sheetText(sampleSheet())), { kid: 'Anu', sourceId: 't', today });
   assert.ok(ok.some((t) => /shoebox/i.test(t.action_line) && t.due_date === '2026-09-30'), JSON.stringify(ok));
   assert.ok(ok.some((t) => /letters/i.test(t.action_line) && t.due_date === '2026-09-29'), JSON.stringify(ok));
 });
 
-test('model: image (OCR) -> task, retries once on bad JSON', async () => {
-  replies = ['Here you go: tasks are...', '{"tasks":[{"action_line":"Bring colour palette and old newspaper","due_date":"2026-09-29","confidence":0.9}]}'];
+test('model: image (OCR) -> task, retries once on an unusable reply', async () => {
+  replies = ['Here you go: tasks are...', {"tasks":[{"action_line":"Bring colour palette and old newspaper","due_date":"2026-09-29","confidence":0.9}]}];
   const raw = await run('Ravi', 'teacher WhatsApp messages', '2026-09-27', `[Image text]\n${fileText(IMAGE)}`);
   assert.ok(raw.some((t) => /palette/i.test(t.action_line) && t.due_date === '2026-09-29'), JSON.stringify(raw));
 });
 
-test('model: gives up after two invalid replies', { skip: LIVE }, async () => {
+test('model: gives up after two unusable replies', { skip: LIVE }, async () => {
   replies = ['nope', 'still nope'];
   assert.equal(await run('Anu', 'email', today, 'hi'), null);
 });

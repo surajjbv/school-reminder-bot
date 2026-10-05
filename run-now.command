@@ -15,17 +15,8 @@ echo
 [[ -f .env ]] || { echo "${RED}No .env file here. See README setup.${OFF}"; say_done 1; }
 command -v node >/dev/null || { echo "${RED}Node.js not found.${OFF}"; say_done 1; }
 
-# Don't overlap with a scheduled run.
-mkdir -p data/state
-find data/state -maxdepth 1 -name lock -mmin +30 -exec rmdir {} \; 2>/dev/null  # left by a crash or power loss
-if ! mkdir data/state/lock 2>/dev/null; then
-  echo "${YEL}Another run is in progress. Try again in a few minutes.${OFF}"; say_done 1
-fi
-# On any exit: release the lock and make sure the bot's model is not left in RAM.
-trap 'rmdir data/state/lock 2>/dev/null; ~/.lmstudio/bin/lms unload school-reminder-bot >/dev/null 2>&1' EXIT
-
 START=$SECONDS
-node --disable-warning=ExperimentalWarning bot.js --slot "manual-$(date +%H%M%S)"
+npm start --silent   # if a scheduled run is going, this one stops at once (exit 75)
 CODE=$?
 echo
 if (( CODE == 0 )); then

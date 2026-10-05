@@ -5,14 +5,15 @@
   "type": "module",
   "description": "Local, headless bot that turns school emails and teacher WhatsApp messages into a daily WhatsApp to-do digest",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=24"
   },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning bot.js",
-    "login:google": "node --disable-warning=ExperimentalWarning login.js google",
-    "login:whatsapp": "node --disable-warning=ExperimentalWarning login.js whatsapp",
-    "schedule": "bash schedule.sh install",
-    "test": "node --disable-warning=ExperimentalWarning --test test.js"
+    "dry": "node --disable-warning=ExperimentalWarning bot.js --dry",
+    "test": "node --disable-warning=ExperimentalWarning --test test.js",
+    "login": "node --disable-warning=ExperimentalWarning bot.js --login",
+    "schedule": "bash kit/schedule.sh install",
+    "unschedule": "bash kit/schedule.sh uninstall"
   },
   "dependencies": {
     "qrcode-terminal": "^0.12.0",
