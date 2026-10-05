@@ -39,9 +39,11 @@ boot=$(secs kern.boottime); wake=$(secs kern.waketime); wake=${wake:-0}
 (( $(date +%s) - (wake > boot ? wake : boot) < 600 )) && exit 0   # let the Mac settle after boot/wake
 
 # "<slot>|<age in s>", e.g. "2026-10-05 20:00|300"
+# Only runTimes and timezone matter here; the bot validates all of config.json when it starts.
 info=$(node --input-type=module -e '
-  import { readConfigJson, currentSlot, slotAge } from "./kit/config.js";
-  const c = readConfigJson(".");
+  import fs from "node:fs";
+  import { KIT_DEFAULTS, currentSlot, slotAge } from "./kit/config.js";
+  const c = { ...KIT_DEFAULTS, ...JSON.parse(fs.readFileSync("config.json", "utf8")) };
   const s = currentSlot(c.runTimes, c.timezone);
   console.log(s ? `${s}|${slotAge(s, c.timezone)}` : "");') || exit 1
 [ -n "$info" ] || exit 0                                           # no runTimes
