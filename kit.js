@@ -157,7 +157,7 @@ export function openStore(dataDir = DATA, { schema = '', importJson = null } = {
 }
 
 // ── llm: one local model shared by independent bots through leases, and ask() ───────────────────────────────
-// Lease protocol (the same in book-distiller's llm.py). State in ~/.local/state/llm-lease/: `lock/` (atomic mkdir,
+// Lease protocol (the same in book-distiller-bot's llm.py). State in ~/.local/state/llm-lease/: `lock/` (atomic mkdir,
 // stale after 120 s), `<bot>.<pid>` leases (dead pid = dead lease), `owned` (a bot, not a person, loaded the model).
 // acquire: lock → drop dead leases → write ours → our model loaded with context >= 16384? use it. Else unload other
 // models idle >= takeoverIdleMinutes, wait (15 s polls, 10 min) for busy ones, check the guardrail (--estimate-only),
