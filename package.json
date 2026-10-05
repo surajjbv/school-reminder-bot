@@ -9,7 +9,6 @@
   },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning bot.js",
-    "dry": "node --disable-warning=ExperimentalWarning bot.js --dry",
     "test": "node --disable-warning=ExperimentalWarning --test test.js",
     "login": "node --disable-warning=ExperimentalWarning bot.js --login",
     "schedule": "bash kit/schedule.sh install",

@@ -14,7 +14,7 @@ export class Temporary extends Error {}
 
 /**
  * name: bot name (lease, notifications) · root: the bot's folder · defaults/env/optionalEnv: see loadConfig ·
- * schema/importJson: see openStore · main({ cfg, env, store, log, dry, args }): the run.
+ * schema/importJson: see openStore · main({ cfg, env, store, log, args }): the run.
  */
 export async function runBot({ name, root, defaults, env, optionalEnv, schema, importJson, main }) {
   const lock = path.join(root, 'data', 'run.lock');
@@ -42,9 +42,9 @@ export async function runBot({ name, root, defaults, env, optionalEnv, schema, i
     }
     haveLock = true;
     llm.setup({ bot: name, model: cfg.model, takeoverIdleMinutes: cfg.takeoverIdleMinutes, log });
-    store = openStore(cfg.data, { schema, dry: cfg.dry, importJson });
-    log.info(`${name} run start${cfg.dry ? ' (dry run: nothing is sent, changed or saved)' : ''}`);
-    await main({ cfg, env: cfg.env, store, log, dry: cfg.dry, args: process.argv.slice(2) });
+    store = openStore(cfg.data, { schema, importJson });
+    log.info(`${name} run start`);
+    await main({ cfg, env: cfg.env, store, log, args: process.argv.slice(2) });
     log.info('run done');
   } catch (err) {
     code = err instanceof Temporary || err instanceof llm.ModelBusy ? 75 : 1;

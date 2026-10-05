@@ -8,7 +8,6 @@ export const KIT_DEFAULTS = {
   model: 'qwen3.8-27b-mlx', // LM Studio model key; the load profile is fixed in llm.js
   timezone: 'Asia/Kolkata',
   runTimes: [], // schedule.sh runs the bot once per run time ("HH:MM" in timezone)
-  dryRun: false, // true: every run is a dry run (nothing sent, changed or saved)
   takeoverIdleMinutes: 5, // another app's model idle this long may be unloaded to make room
   chromePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 };
@@ -39,7 +38,7 @@ export function readConfigJson(root, defaults = {}) {
 
 /**
  * Loads .env (personal) and config.json (public). `env`: required .env keys, `optionalEnv`: the rest the bot reads.
- * Returns the config plus `env` (just those keys), `dry` (--dry or dryRun), `root` and `data` (created).
+ * Returns the config plus `env` (just those keys), `root` and `data` (created).
  */
 export function loadConfig(root, { defaults = {}, env = [], optionalEnv = [] } = {}) {
   const envFile = path.join(root, '.env');
@@ -57,7 +56,6 @@ export function loadConfig(root, { defaults = {}, env = [], optionalEnv = [] } =
   return {
     ...cfg, root, data, unusedEnv: unused,
     env: Object.fromEntries([...known].map((k) => [k, process.env[k]?.trim() ?? ''])),
-    dry: process.argv.includes('--dry') || cfg.dryRun,
   };
 }
 

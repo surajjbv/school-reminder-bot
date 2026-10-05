@@ -5,6 +5,5 @@
   "runTimes": ["20:00"],
   "emailLookbackDays": 14,
   "whatsappLookbackDays": 14,
-  "dryRun": false,
   "chromePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 }

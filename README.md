@@ -29,8 +29,7 @@ Needs: a Mac with Node 24+, Google Chrome, [LM Studio](https://lmstudio.ai) with
 1. `npm install`, then `cp .env.example .env` and fill in names, chats and group. Settings (run time, lookbacks) are in `config.json`.
 2. In Google Cloud, enable the Gmail, Classroom and Drive APIs. Publish the consent screen, create a **Desktop** OAuth client, and put its ID and secret in `.env`.
 3. `npm run login`: choose the **kid's school account** in the browser (read-only, never expires), then scan the WhatsApp QR code. (`npm run login -- google` or `-- whatsapp` for just one.)
-4. `npm run dry` reads everything and prints the message it would send; nothing is sent or saved.
-5. `npm run schedule`. It sends daily at `runTimes` (`20:00`). If the Mac was asleep, it sends 10 min after it wakes (up to 10 h late); a failed send is retried every 5 min three times, then every 30 min.
+4. `npm run schedule`. It sends daily at `runTimes` (`20:00`). If the Mac was asleep, it sends 10 min after it wakes (up to 10 h late); a failed send is retried every 5 min three times, then every 30 min.
 
 **Run now:** double-click `run-now.command`.
 

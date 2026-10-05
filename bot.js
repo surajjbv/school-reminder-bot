@@ -1,6 +1,5 @@
 // One run: read new school items -> extract tasks with the local model -> send today's reminder -> exit.
 //   npm start                  run now (scheduled runs get the slot from kit/schedule.sh)
-//   npm run dry                everything except sending; nothing is saved
 //   npm run login [-- google|whatsapp]   one-time logins (both by default)
 //   add -- --slot "YYYY-MM-DD HH:MM" to run as that send time
 import { currentSlot } from './kit/config.js';
@@ -106,7 +105,7 @@ runBot({
   optionalEnv: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REFRESH_TOKEN', 'SCHOOL_GMAIL_QUERY', 'MENTION_NUMBER_ENDS_WITH'],
   schema: SCHEMA,
   async main(ctx) {
-    const { cfg, env, store, log, dry, args } = ctx;
+    const { cfg, env, store, log, args } = ctx;
     if (args.includes('--login')) {
       const what = args[args.indexOf('--login') + 1];
       if (what !== 'whatsapp') await googleLogin(cfg.root, SCOPES, "the kid's school Google account");
@@ -170,21 +169,19 @@ runBot({
         // act
         const mention = await wa.mention();
         const text = buildDigest(tasks, today, mention.token, newOnly, modelUsed);
-        log.step(`[5/5] ${dry ? 'Would send' : 'Sending'} to "${env.GROUP_NAME}"`);
-        log.box(`${dry ? 'would send' : 'sending'} to "${env.GROUP_NAME}"`, text.replace(mention.token, '@' + env.MENTION_NAME));
-        if (!dry) {
-          await wa.sendToGroup(text, mention.id);
-          db.prepare('INSERT INTO sent (day, slot, text, at) VALUES (?, ?, ?, ?)').run(period, slot, text, new Date().toISOString());
-          markSent(db, tasks, today);
-          log.done(`${env.GROUP_NAME}: ${text.replace(/\n/g, ' | ')}`);
-        }
+        log.step(`[5/5] Sending to "${env.GROUP_NAME}"`);
+        log.box(`sending to "${env.GROUP_NAME}"`, text.replace(mention.token, '@' + env.MENTION_NAME));
+        await wa.sendToGroup(text, mention.id);
+        db.prepare('INSERT INTO sent (day, slot, text, at) VALUES (?, ?, ?, ?)').run(period, slot, text, new Date().toISOString());
+        markSent(db, tasks, today);
+        log.done(`${env.GROUP_NAME}: ${text.replace(/\n/g, ' | ')}`);
       } else {
         log.step('[5/5] Nothing to send');
         log.info(tasks.length ? `slot ${slot} already sent` : newOnly ? 'nothing new since the last message' : 'no tasks today, nothing sent');
       }
     } catch (err) {
       // Also tell the user on WhatsApp (to self). Scheduled runs retry, so only the first failure per send time.
-      if (!dry && !(err instanceof llm.ModelBusy) && store.get('alerted') !== period) {
+      if (!(err instanceof llm.ModelBusy) && store.get('alerted') !== period) {
         store.set('alerted', period);
         await wa?.sendToSelf(`School reminder bot FAILED during ${log.currentStep}: ${err.message}. It keeps retrying until sent. Details: data/bot.log`).catch(() => {});
       }
