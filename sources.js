@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as XLSX from 'xlsx';
-import { DATA, googleApi, log, openWhatsApp, ROOT } from './kit.js';
+import { DATA, expandHome, googleApi, log, openWhatsApp, ROOT } from './kit.js';
 import { istDate } from './rules.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -180,7 +180,7 @@ export async function classroomPosts(afterMs) {
 
 /** Opens WhatsApp (`login`: link this Mac with a QR) and adds the school bot's lookups. Chat ids are cached in the store. */
 export async function schoolWhatsApp({ cfg, env, store, login = false }) {
-  const wa = await openWhatsApp({ dir: cfg.data, chromePath: cfg.chromePath, login });
+  const wa = await openWhatsApp({ dir: path.resolve(ROOT, expandHome(cfg.whatsappDir)), chromePath: cfg.chromePath, login });
   const { client } = wa;
   let contacts;
   // Chat IDs are looked up by saved name once (scanning contacts is slow), then cached.

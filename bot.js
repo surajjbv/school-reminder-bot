@@ -94,6 +94,7 @@ runBot({
     runTimes: ['20:00'], // several: later ones send only tasks not yet sent that day
     emailLookbackDays: 14, // how far back the very first run reads; later runs read everything since the last run
     whatsappLookbackDays: 14,
+    whatsappDir: 'data', // folder holding wa-auth/ (the linked WhatsApp login); can be shared with other bots
   },
   env: ['EMAIL_KID_NAME', 'CHAT_KID_NAME', 'TEACHER_CHAT_NAME', 'GROUP_NAME', 'MENTION_NAME'],
   optionalEnv: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REFRESH_TOKEN', 'SCHOOL_GMAIL_QUERY', 'MENTION_NUMBER_ENDS_WITH'],

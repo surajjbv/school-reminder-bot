@@ -27,8 +27,9 @@ local model (Qwen3.8 27B in LM Studio) extracts the tasks. Read-only, private; n
    until its date), later ones only new tasks. A message counts as sent only when WhatsApp's server confirms it.
 
 The model loads while WhatsApp starts, is shared with the other bots, and is released after extraction. If it
-can't be had (busy, or too little memory for LM Studio's guardrail), the run is retried. pgrs-status-bot shares
-this bot's WhatsApp login (`data/wa-auth`); the two take turns.
+can't be had (busy, or too little memory for LM Studio's guardrail), the run is retried. The WhatsApp login
+is one linked device shared with pgrs-status-bot, kept outside both projects (`whatsappDir`: `~/.local/state/whatsapp`);
+the two take turns.
 
 ## Setup (macOS, Node 24+, Google Chrome, LM Studio with Qwen3.8 27B, Xcode command line tools)
 
@@ -55,7 +56,7 @@ test-notice.png   sample notice for the OCR test
 config.json       public settings              .env.example  personal values template
 pii-check.sh      personal-data gate before a commit: bash pii-check.sh && git commit ...
 run-now.command   double-click = npm start     package.json  npm start · test · login · schedule · unschedule
-data/             (gitignored) bot.db state · bot.log log · run.out scheduler · wa-auth WhatsApp login · ocr
+data/             (gitignored) bot.db state · bot.log log · run.out scheduler · ocr
 ```
 
 ## When something goes wrong

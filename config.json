@@ -2,7 +2,11 @@
   "_comment": "Public settings (names, chats, group and the Google login live in .env). Defaults and validation: bot.js and kit.js.",
   "model": "qwen3.8-27b-mlx",
   "timezone": "Asia/Kolkata",
-  "runTimes": ["20:00"],
+  "runTimes": [
+    "20:00"
+  ],
+  "_whatsappDir": "the linked WhatsApp login (wa-auth/), one folder shared by the bots that message; they take turns",
+  "whatsappDir": "~/.local/state/whatsapp",
   "emailLookbackDays": 14,
   "whatsappLookbackDays": 14,
   "chromePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
