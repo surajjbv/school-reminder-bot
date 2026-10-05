@@ -5,10 +5,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as XLSX from 'xlsx';
-import { currentSlot } from './kit/config.js';
-import * as llm from './kit/llm.js';
+import { BadReply, currentSlot, llm } from './kit.js';
 import { buildDigest, extractTasks, isDuplicate, markSent, saveTasks, SCHEMA, tasksToSend, validateTasks } from './rules.js';
-import { driveLinks, fileText, sheetText } from './sources/text.js';
+import { driveLinks, fileText, sheetText } from './sources.js';
 
 const LIVE = process.env.LIVE === '1';
 const today = '2026-09-28'; // a Monday
@@ -34,7 +33,7 @@ const openDb = () => { const db = new DatabaseSync(':memory:'); db.exec(SCHEMA);
 let replies = [];
 const ask = LIVE ? llm.ask : async () => {
   const r = replies.shift();
-  if (typeof r === 'string') throw new llm.BadReply('model reply is not JSON');
+  if (typeof r === 'string') throw new BadReply('model reply is not JSON');
   return r;
 };
 after(() => llm.release());

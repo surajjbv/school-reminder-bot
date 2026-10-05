@@ -1,12 +1,11 @@
-// Deciding: the model's task extraction plus the code-side rules (grounded dates, dedupe, what to send) and the digest.
-import fs from 'node:fs';
-import { BadReply } from './kit/llm.js';
-import { log } from './kit/log.js';
+// Decisions and text, no I/O: the model's task extraction (prompt, schema), the code-side rules (grounded dates,
+// dedupe, what to send) and the digest.
+import { BadReply, log } from './kit.js';
 
 const MIN_CONFIDENCE = 0.5;
 const MAX_AHEAD_DAYS = 60;
 
-/** The bot's tables in data/bot.db (kv and processed come from kit/store.js). */
+/** The bot's tables in data/bot.db (kv and processed come from kit.js). */
 export const SCHEMA = `
   CREATE TABLE IF NOT EXISTS watched (id TEXT PRIMARY KEY, modified TEXT, first_seen TEXT); -- attached Sheets/Docs re-checked for edits
   CREATE TABLE IF NOT EXISTS tasks (
@@ -181,12 +180,26 @@ export function buildDigest(tasks, today, mention, newOnly = false, footer = nul
 }
 
 // ── the model ─────────────────────────────────────────────────────────────
-const SYSTEM = fs.readFileSync(new URL('./prompts/tasks.md', import.meta.url), 'utf8').trim();
+const SYSTEM = `You extract action items for a parent from school messages (emails, class announcements, spreadsheets, teacher WhatsApp messages, OCR text of notices).
+Return ONLY JSON: {"tasks":[{"action_line":"...","due_date":"YYYY-MM-DD or null","date_source":"exact words from the message that state the date, or null","confidence":0.0-1.0}]}
+Rules:
+- action_line: starts with a verb, max 12 words, concrete, no dates in it (keep a specific time like "2:15 PM"). Use only what the message says; never invent tasks.
+- Only things the parent/child must DO or BRING, or dated events to attend. Invitations to school events or competitions the child can join count (e.g. register/attend). Ignore circulars with no action, recaps of past events, greetings.
+- "View/see/access/check the attachment, picture, folder, link or timetable" is NOT a task.
+- Messages written TO the school (leave notes, "I will be late") or by other parents (e.g. "I have paid the fee") contain no tasks.
+- Lines like "Completed pg 10", "Introduction of ...", "Reinforcement of ..." describe class work already done: they are NOT tasks. In weekly-update sheets, tasks are under "Practice work"/"Submission Dates" and "Requirements".
+- Ignore OTP / verification-code / password emails completely, and never put any code or password in action_line.
+- Resolve relative dates ("tomorrow", "Monday", "29/09") against the message date. Dates are Indian format (DD/MM). Timezone IST.
+- Skip tasks whose due date is before Today (e.g. older weeks in a homework sheet).
+- For deadlines ("fill form by 18th") use that deadline as due_date.
+- Registration/sign-up for an event with no stated deadline: due_date is the event date. Merge "register" and "attend" for the same event into one task.
+- NEVER guess a date. due_date only if the message itself states the date or day for that task; copy those exact words into date_source. Otherwise due_date and date_source are null.
+- One task per distinct action, at most 10, most important first. No tasks -> {"tasks":[]}.`;
 const TASKS = { type: 'object', additionalProperties: false, required: ['tasks'], properties: { tasks: { type: 'array', maxItems: 10, items: {
   type: 'object', additionalProperties: false, required: ['action_line', 'due_date', 'date_source', 'confidence'],
   properties: { action_line: { type: 'string' }, due_date: { type: ['string', 'null'] }, date_source: { type: ['string', 'null'] }, confidence: { type: 'number' } } } } } };
 
-/** Raw model tasks for one source item, or null if the reply was unusable twice. `ask`: kit/llm.js ask (tests stub it). */
+/** Raw model tasks for one source item, or null if the reply was unusable twice. `ask`: kit llm.ask (tests stub it). */
 export async function extractTasks(item, today, ask) {
   const user = `Kid: ${item.kid}\nSource: ${item.kind}\nMessage date: ${item.date} (${pretty(item.date)})\nToday: ${today} (${pretty(today)})\n---\n${item.text.slice(0, 30000)}`;
   for (let attempt = 1; attempt <= 2; attempt++) {

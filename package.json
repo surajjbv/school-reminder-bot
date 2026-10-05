@@ -9,10 +9,10 @@
   },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning bot.js",
-    "test": "node --disable-warning=ExperimentalWarning --test test.js",
+    "test": "node --disable-warning=ExperimentalWarning --test",
     "login": "node --disable-warning=ExperimentalWarning bot.js --login",
-    "schedule": "bash kit/schedule.sh install",
-    "unschedule": "bash kit/schedule.sh uninstall"
+    "schedule": "node kit.js schedule",
+    "unschedule": "node kit.js unschedule"
   },
   "dependencies": {
     "qrcode-terminal": "^0.12.0",

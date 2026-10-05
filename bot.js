@@ -1,14 +1,9 @@
-// One run: read new school items -> extract tasks with the local model -> send today's reminder -> exit.
-//   npm start                  run now (scheduled runs get the slot from kit/schedule.sh)
-//   npm run login [-- google|whatsapp]   one-time logins (both by default)
-//   add -- --slot "YYYY-MM-DD HH:MM" to run as that send time
-import { currentSlot } from './kit/config.js';
-import { googleLogin } from './kit/google.js';
-import * as llm from './kit/llm.js';
-import { runBot } from './kit/run.js';
+// school-reminder-bot: reads new school email, Classroom posts and the teacher's WhatsApp messages, extracts the
+// tasks with the local model, and sends one reminder of everything still due to a WhatsApp group at 20:00.
+//   npm start · npm run login [-- google|whatsapp] (both by default) · npm start -- --slot "YYYY-MM-DD HH:MM"
+import { currentSlot, googleLogin, llm, ModelBusy, runBot } from './kit.js';
 import { addDays, buildDigest, extractTasks, istDate, istTime, markSent, saveTasks, SCHEMA, tasksToSend, validateTasks } from './rules.js';
-import { classroomPosts, driveModified, driveText, fetchSchoolMails, SCOPES } from './sources/google.js';
-import { schoolWhatsApp } from './sources/whatsapp.js';
+import { classroomPosts, driveModified, driveText, fetchSchoolMails, schoolWhatsApp, SCOPES } from './sources.js';
 
 const WATCH_DAYS = 14; // re-check attached Sheets/Docs this long for edits
 const MAX_NESTED = 5;
@@ -95,7 +90,6 @@ async function collectTeacherChat({ cfg, env, store, log }, wa) {
 
 runBot({
   name: 'school-reminder-bot',
-  root: import.meta.dirname,
   defaults: {
     runTimes: ['20:00'], // several: later ones send only tasks not yet sent that day
     emailLookbackDays: 14, // how far back the very first run reads; later runs read everything since the last run
@@ -108,7 +102,7 @@ runBot({
     const { cfg, env, store, log, args } = ctx;
     if (args.includes('--login')) {
       const what = args[args.indexOf('--login') + 1];
-      if (what !== 'whatsapp') await googleLogin(cfg.root, SCOPES, "the kid's school Google account");
+      if (what !== 'whatsapp') await googleLogin(SCOPES, "the kid's school Google account");
       if (what !== 'google') await (await schoolWhatsApp({ cfg, env, store, login: true })).close();
       return log.done('logged in');
     }
@@ -128,6 +122,8 @@ runBot({
       // collect
       log.step(`[1/5] Checking ${env.EMAIL_KID_NAME}'s school email and Classroom`);
       const school = await collectSchool(ctx, today);
+      // New items: load the model now, while WhatsApp is still starting.
+      const warming = school.items.length ? llm.acquire().catch((err) => err) : null;
       log.step(`[2/5] Reading ${env.TEACHER_CHAT_NAME} on WhatsApp`);
       const waResult = await waStarting;
       if (waResult instanceof Error) throw waResult;
@@ -137,7 +133,8 @@ runBot({
       // decide
       log.step(items.length ? `[3/5] Extracting tasks from ${items.length} new item(s) with the local model` : '[3/5] No new messages, model not needed');
       if (items.length) {
-        await llm.acquire();
+        const model = await (warming ?? llm.acquire());
+        if (model instanceof Error) throw model;
         modelUsed = llm.label(cfg.model);
         for (const [i, item] of items.entries()) {
           log.info(`item ${i + 1}/${items.length}: ${item.kind}, ${item.date}`);
@@ -181,7 +178,7 @@ runBot({
       }
     } catch (err) {
       // Also tell the user on WhatsApp (to self). Scheduled runs retry, so only the first failure per send time.
-      if (!(err instanceof llm.ModelBusy) && store.get('alerted') !== period) {
+      if (!(err instanceof ModelBusy) && store.get('alerted') !== period) {
         store.set('alerted', period);
         await wa?.sendToSelf(`School reminder bot FAILED during ${log.currentStep}: ${err.message}. It keeps retrying until sent. Details: data/bot.log`).catch(() => {});
       }
