@@ -466,8 +466,9 @@ export async function openWhatsApp({ dir = DATA, chromePath, login = false }) {
       if (groups.length !== 1) throw new Error(`WhatsApp: expected 1 group named "${name}", found ${groups.length}`);
       return groups[0].id._serialized;
     },
-    /** Sends and waits until WhatsApp's server has it (sendMessage only queues it in the browser). */
-    async send(to, text, options = {}) {
+    /** Sends and waits until WhatsApp's server has it (sendMessage only queues it in the browser). Then marks
+     *  the chat unread (synced to the phone): messages from our own number never notify. `markUnread: false` skips it. */
+    async send(to, text, { markUnread = true, ...options } = {}) {
       const msg = await client.sendMessage(to, text, { linkPreview: false, ...options });
       if (!msg?.id) throw new Error('WhatsApp did not create the message');
       let ack = msg.ack;
@@ -476,6 +477,9 @@ export async function openWhatsApp({ dir = DATA, chromePath, login = false }) {
       }
       if (ack < 1) throw new Error(`WhatsApp message not sent (${ack === -1 ? 'error' : 'still pending after 60 s'})`);
       log.info(`WhatsApp message ${msg.id.id} is on WhatsApp's server`);
+      if (markUnread) {
+        try { await client.markChatUnread(to); } catch (err) { log.warn(`could not mark the chat unread: ${err.message}`); }
+      }
       return msg;
     },
   };
