@@ -523,10 +523,20 @@ export async function openWhatsApp({ dir = DATA, chromePath, login = false }) {
       }
       if (ack < 1) throw new Error(`WhatsApp message not sent (${ack === -1 ? 'error' : 'still pending after 60 s'})`);
       log.info(`WhatsApp message ${msg.id.id} is on WhatsApp's server`);
-      if (markUnread) {
-        try { await client.markChatUnread(to); } catch (err) { log.warn(`could not mark the chat unread: ${err.message}`); }
-      }
+      if (markUnread && !(await this.markUnread(to))) log.warn('could not mark the chat unread');
       return msg;
+    },
+    /** Marks the chat unread (synced to the phone). WhatsApp Web's command only signals its chat list and is
+     *  dropped until that is up, so it is checked and repeated for up to 20 s. */
+    async markUnread(id) {
+      for (let i = 0; i < 10; i++) {
+        try {
+          await client.markChatUnread(id);
+          await sleep(2000);
+          if ((await client.getChatById(id)).unreadCount === -1) return true;
+        } catch (err) { log.warn(`mark unread: ${err.message}`); }
+      }
+      return false;
     },
   };
 }
