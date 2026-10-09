@@ -405,56 +405,102 @@ export function googleLogin(scopes, who = 'the Google account the bot should use
 }
 
 // ── whatsapp: WhatsApp Web in headless Chrome. One linked login (dir/wa-auth) may be shared by several bots;
-//    only one Chrome may use it at a time, so opening takes dir/wa.lock and waits ──────────────────────────────
+//    only one Chrome may use it at a time, so opening takes dir/wa.lock (holding the owner's pid) and waits.
+//    Chrome runs over a pipe, so it exits with its bot even on kill -9 ───────────────────────────────────────────
 export class WhatsAppLoggedOut extends Error {}
+class WhatsAppStalled extends Error {}
 
-async function lockWhatsApp(dir) {
+export async function lockWhatsApp(dir) {
   const lockDir = path.join(dir, 'wa.lock');
-  const chromeBusy = () => { // Chrome's own profile lock: a 'host-pid' symlink while that Chrome runs
-    try { return alive(Number(fs.readlinkSync(path.join(dir, 'wa-auth/session/SingletonLock')).split('-').pop())); } catch { return false; }
+  const owner = path.join(lockDir, 'pid');
+  const profile = path.join(dir, 'wa-auth/session');
+  const lockFree = () => { // no lock, or its bot is gone (a lock without a pid is from an older kit: stale after 30 min)
+    try { if (alive(Number(fs.readFileSync(owner, 'utf8')))) return false; } catch {
+      try { if (Date.now() - fs.statSync(lockDir).mtimeMs < 30 * 60000) return false; } catch { return true; }
+    }
+    fs.rmSync(lockDir, { recursive: true, force: true });
+    return true;
   };
   for (const end = Date.now() + 45 * 60000; ; await sleep(20000)) {
-    try { if (Date.now() - fs.statSync(lockDir).mtimeMs > 30 * 60000) fs.rmdirSync(lockDir); } catch { /* no lock */ } // left by a crash
-    if (!chromeBusy()) try { fs.mkdirSync(lockDir); break; } catch { /* another bot has WhatsApp open */ }
+    if (lockFree()) try { fs.mkdirSync(lockDir); fs.writeFileSync(owner, String(process.pid)); break; } catch { /* another bot was faster */ }
     if (Date.now() > end) throw new Error('WhatsApp stayed busy (another bot) for 45 min');
     log.info('another bot is using WhatsApp, waiting…');
+  }
+  // We hold the lock, so a Chrome still on the login was left behind by a killed bot: close it.
+  // Chrome's own profile lock is a 'host-pid' symlink; the command line check guards against a reused pid.
+  let pid = 0;
+  try { pid = Number(fs.readlinkSync(path.join(profile, 'SingletonLock')).split('-').pop()); } catch { /* no Chrome */ }
+  if (pid && alive(pid) && execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).includes(profile)) {
+    log.warn(`closing a WhatsApp Chrome left behind by another run (pid ${pid})`);
+    try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+    for (let i = 0; i < 20 && alive(pid); i++) await sleep(500);
+    try { process.kill(pid, 'SIGKILL'); } catch { /* exited */ }
   }
   const unlock = () => fs.rmSync(lockDir, { recursive: true, force: true });
   process.on('exit', unlock);
   return unlock;
 }
 
+/** wwebjs#201946: right after login a short-lived frame closes while the library sets up its listeners, the error is
+ *  swallowed and `ready` never fires. The setup skips what is already done, so retrying it is safe. */
+function patchAttach(Client) {
+  if (Client.prototype.attachEventListeners.patched) return;
+  const attach = Client.prototype.attachEventListeners;
+  Client.prototype.attachEventListeners = async function (...args) {
+    for (let i = 1; ; i++) {
+      try { return await attach.apply(this, args); } catch (err) {
+        if (err?.name !== 'TargetCloseError' || i === 5) throw err;
+        await sleep(1000);
+      }
+    }
+  };
+  Client.prototype.attachEventListeners.patched = true;
+}
+
 /** Opens WhatsApp. With `login`, shows the QR to link this Mac; otherwise a QR means it was unlinked. */
 export async function openWhatsApp({ dir = DATA, chromePath, login = false }) {
   const [{ default: wweb }, { default: qrcode }] = await Promise.all([import('whatsapp-web.js'), import('qrcode-terminal')]);
+  patchAttach(wweb.Client);
   fs.mkdirSync(dir, { recursive: true });
   const unlock = await lockWhatsApp(dir);
-  const client = new wweb.Client({
-    authStrategy: new wweb.LocalAuth({ dataPath: path.join(dir, 'wa-auth') }),
-    webVersionCache: { type: 'local', path: path.join(dir, 'wa-cache') },
-    puppeteer: { headless: true, executablePath: chromePath, args: ['--no-first-run'] },
-  });
-  const close = async () => { await client.destroy().catch(() => {}); unlock(); };
-  try {
-    await new Promise((ok, fail) => {
-      // The first connection after hours offline syncs history first; that can take minutes.
-      const timer = setTimeout(() => fail(new Error('WhatsApp not ready in 10 min (phone offline?)')), 600000);
-      const stop = (err) => { clearTimeout(timer); fail(err); };
-      let pct = -1;
-      client.on('loading_screen', (p) => { if (p - pct >= 25 || p === 100) log.info(`WhatsApp syncing ${p}%`); pct = p; });
-      client.on('qr', (qr) => {
-        if (!login) return stop(new WhatsAppLoggedOut('WhatsApp is unlinked: run `npm run login`'));
-        console.log('\nWhatsApp > Settings > Linked devices > Link a device, then scan:\n');
-        qrcode.generate(qr, { small: true });
-      });
-      client.on('auth_failure', (m) => stop(new WhatsAppLoggedOut(`WhatsApp auth failed: ${m}`)));
-      client.on('disconnected', (reason) => log.warn(`WhatsApp disconnected: ${reason}`));
-      client.on('ready', () => { clearTimeout(timer); ok(); });
-      client.initialize().catch(stop);
+  let client;
+  const close = async () => { await client?.destroy().catch(() => {}); unlock(); };
+  // Backstop for any other stall where `ready` never follows `authenticated`: a fresh Chrome, 3 tries in all.
+  for (let attempt = 1; ; attempt++) {
+    client = new wweb.Client({
+      authStrategy: new wweb.LocalAuth({ dataPath: path.join(dir, 'wa-auth') }),
+      webVersionCache: { type: 'local', path: path.join(dir, 'wa-cache') },
+      puppeteer: { headless: true, executablePath: chromePath, args: ['--no-first-run'], pipe: true },
     });
-  } catch (err) {
-    await close();
-    throw err;
+    try {
+      await new Promise((ok, fail) => {
+        // The first connection after hours offline syncs history first; that can take minutes.
+        const timer = setTimeout(() => fail(new Error('WhatsApp not ready in 10 min (phone offline?)')), 600000);
+        let stall;
+        const stop = (err) => { clearTimeout(timer); clearTimeout(stall); fail(err); };
+        let pct = -1;
+        client.on('loading_screen', (p) => { if (p - pct >= 25 || p === 100) log.info(`WhatsApp syncing ${p}%`); pct = p; });
+        client.on('authenticated', () => { stall = setTimeout(() => stop(new WhatsAppStalled()), 90000); });
+        client.on('qr', (qr) => {
+          if (!login) return stop(new WhatsAppLoggedOut('WhatsApp is unlinked: run `npm run login`'));
+          console.log('\nWhatsApp > Settings > Linked devices > Link a device, then scan:\n');
+          qrcode.generate(qr, { small: true });
+        });
+        client.on('auth_failure', (m) => stop(new WhatsAppLoggedOut(`WhatsApp auth failed: ${m}`)));
+        client.on('disconnected', (reason) => log.warn(`WhatsApp disconnected: ${reason}`));
+        client.on('ready', () => { clearTimeout(timer); clearTimeout(stall); ok(); });
+        client.initialize().catch(stop);
+      });
+      break;
+    } catch (err) {
+      if (err instanceof WhatsAppStalled && attempt < 3) {
+        log.warn(`WhatsApp logged in but never got ready; restarting Chrome (try ${attempt + 1} of 3)`);
+        await client.destroy().catch(() => {});
+        continue;
+      }
+      await close();
+      throw err instanceof WhatsAppStalled ? new Error('WhatsApp logged in but never got ready (3 tries)') : err;
+    }
   }
   return {
     client,

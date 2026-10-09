@@ -52,7 +52,7 @@ fs.writeFileSync(FAKE_LMS, `#!/usr/bin/env node\nimport fs from 'node:fs';\n(${f
 fs.writeFileSync(WORKER, `(${workerMain})();\n`);
 Object.assign(process.env, { LMS_BIN: FAKE_LMS, FAKE_LMS_STATE: STATE, LLM_LEASE_DIR: LEASES, KIT_URL: `file://${KIT}` });
 const kit = await import('./kit.js');
-const { llm, currentSlot, readConfigJson, slotAge, ConfigError, openStore } = kit;
+const { llm, currentSlot, readConfigJson, slotAge, ConfigError, openStore, lockWhatsApp } = kit;
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 const lmsState = () => JSON.parse(fs.readFileSync(STATE, 'utf8'));
@@ -204,6 +204,22 @@ test('config: slots in the bot time zone', () => {
   assert.equal(currentSlot(['20:00'], tz, at('2026-10-05T18:40:00Z')), '2026-10-05 20:00'); // 00:10 IST on the 6th
   assert.equal(currentSlot([], tz), null);
   assert.equal(slotAge('2026-10-05 10:00', tz, at('2026-10-05T05:00:00Z')), 1800);
+});
+
+test('whatsapp lock: a dead owner\'s lock is taken and the Chrome it left behind is closed', async () => {
+  const dir = fs.mkdtempSync(path.join(tmp, 'wa-'));
+  const profile = path.join(dir, 'wa-auth/session');
+  fs.mkdirSync(profile, { recursive: true });
+  fs.mkdirSync(path.join(dir, 'wa.lock'));
+  fs.writeFileSync(path.join(dir, 'wa.lock/pid'), '999999'); // a bot killed with -9
+  const chrome = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', profile]); // stand-in: profile on its command line
+  const exited = new Promise((ok) => chrome.on('exit', ok));
+  fs.symlinkSync(`host-${chrome.pid}`, path.join(profile, 'SingletonLock'));
+  const unlock = await lockWhatsApp(dir);
+  await exited;
+  assert.equal(fs.readFileSync(path.join(dir, 'wa.lock/pid'), 'utf8'), String(process.pid));
+  unlock();
+  assert.ok(!fs.existsSync(path.join(dir, 'wa.lock')));
 });
 
 test('store: kv, processed, bot tables, old state.json imported once', () => {
