@@ -92,7 +92,7 @@ data/             (gitignored) bot.db · bot.log · run.out · schedule.json · 
 ```
 
 **Commands:** `npm start` · `npm test` · `npm run login [-- google|whatsapp]` · `npm run schedule` / `unschedule`.
-**Code checks:** before committing run `npm run fix && npm run check && npm test` (Biome lint + format; GitHub CI runs the same on every push).
+**Code checks:** before committing run `npm run fix && npm run check && npm test` (Biome lint + format; GitHub CI runs the same on every push). A pre-commit hook runs these checks plus pii-check.sh automatically; turn it on once per clone with `git config core.hooksPath .githooks`.
 **When something fails:** a macOS notification and a WhatsApp to you; details in `data/bot.log` and `data/run.out`.
 **License:** MIT.
 

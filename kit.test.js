@@ -2,6 +2,7 @@
 // written to a temp folder below, so this file needs nothing else.
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -392,4 +393,15 @@ test('scheduler: one run per slot; failures retried, 3 tries then 30 min apart',
   tick(); // done for this slot
   assert.equal(runs(), 4);
   assert.match(fs.readFileSync(path.join(bot, 'runs'), 'utf8'), /^\d{4}-\d\d-\d\d \d\d:\d\d$/m);
+});
+
+// Every bot carries the same kit.js. When the kit changes on purpose, copy it to all the bots and update this hash
+// in each kit.test.js (shasum -a 256 kit.js).
+test('kit.js is the shared copy, byte for byte', () => {
+  const sha = crypto.createHash('sha256').update(fs.readFileSync(KIT)).digest('hex');
+  assert.equal(
+    sha,
+    '244788aeb6f126f376de6e8a3ed7a6ad5d7dedcccbe6322c5735c95a65eb4dbe',
+    'kit.js drifted from the shared copy',
+  );
 });

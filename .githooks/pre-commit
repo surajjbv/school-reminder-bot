@@ -1,0 +1,10 @@
+#!/bin/bash
+# Pre-commit gate: Biome lint + format check, tests, then the personal-data check. Enable once per clone with
+#   git config core.hooksPath .githooks
+set -u
+cd "$(git rev-parse --show-toplevel)" || exit 1
+fail() { echo "pre-commit: $1" >&2; exit 1; }
+[ -x node_modules/.bin/biome ] || fail "Biome is not installed: run npm install"
+npm run -s check >/dev/null 2>&1 || { npm run -s check; fail "run npm run fix (layout, safe lint fixes) and stage the result"; }
+out=$(npm test 2>&1) || { echo "$out" | tail -40 >&2; fail "tests failed"; }
+bash pii-check.sh . || fail "personal data staged (above)"
