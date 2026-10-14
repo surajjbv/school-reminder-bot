@@ -23,14 +23,28 @@ function fakeLms(fs) {
   const opt = (k) => a[a.indexOf(k) + 1];
   if (a[0] === 'server') console.log(a[1] === 'status' ? '{"running":true,"port":1234}' : 'started');
   else if (a[0] === 'ps') console.log(JSON.stringify(s.models));
-  else if (a[0] === 'load' && a.includes('--estimate-only')) console.log(s.fit === false ? 'This model will fail to load' : 'This model may be loaded');
+  else if (a[0] === 'load' && a.includes('--estimate-only'))
+    console.log(s.fit === false ? 'This model will fail to load' : 'This model may be loaded');
   else if (a[0] === 'load') {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300); // loading takes a while
-    if (s.models.some((m) => m.identifier === opt('--identifier'))) { console.error('identifier in use'); process.exit(1); }
-    s.models.push({ type: 'llm', modelKey: a[1], identifier: opt('--identifier'), contextLength: Number(opt('--context-length')), status: 'idle', lastUsedTime: Date.now() });
+    if (s.models.some((m) => m.identifier === opt('--identifier'))) {
+      console.error('identifier in use');
+      process.exit(1);
+    }
+    s.models.push({
+      type: 'llm',
+      modelKey: a[1],
+      identifier: opt('--identifier'),
+      contextLength: Number(opt('--context-length')),
+      status: 'idle',
+      lastUsedTime: Date.now(),
+    });
     s.loads++;
   } else if (a[0] === 'unload') {
-    if (!s.models.some((m) => m.identifier === a[1])) { console.error(`not loaded: ${a[1]}`); process.exit(1); }
+    if (!s.models.some((m) => m.identifier === a[1])) {
+      console.error(`not loaded: ${a[1]}`);
+      process.exit(1);
+    }
     s.models = s.models.filter((m) => m.identifier !== a[1]);
     s.unloads++;
   }
@@ -44,21 +58,46 @@ async function workerMain() {
   const { llm, ModelBusy } = await import(process.env.KIT_URL);
   llm.setup({ bot: name, model: 'qwen3.8-27b-mlx', pollMs: 50, waitMs: Number(waitMs), log: { info() {}, warn() {} } });
   await new Promise((r) => setTimeout(r, Number(delay)));
-  try { await llm.acquire(); console.log('acquired'); } catch (e) { console.log(e instanceof ModelBusy ? 'busy' : `error ${e.message}`); process.exit(75); }
+  try {
+    await llm.acquire();
+    console.log('acquired');
+  } catch (e) {
+    console.log(e instanceof ModelBusy ? 'busy' : `error ${e.message}`);
+    process.exit(75);
+  }
   if (hold === 'forever') setInterval(() => {}, 1000);
   else setTimeout(() => process.exit(0), Number(hold)); // release() runs on exit
 }
 fs.writeFileSync(FAKE_LMS, `#!/usr/bin/env node\nimport fs from 'node:fs';\n(${fakeLms})(fs);\n`, { mode: 0o755 });
 fs.writeFileSync(WORKER, `(${workerMain})();\n`);
-Object.assign(process.env, { LMS_BIN: FAKE_LMS, FAKE_LMS_STATE: STATE, LLM_LEASE_DIR: LEASES, KIT_URL: `file://${KIT}` });
+Object.assign(process.env, {
+  LMS_BIN: FAKE_LMS,
+  FAKE_LMS_STATE: STATE,
+  LLM_LEASE_DIR: LEASES,
+  KIT_URL: `file://${KIT}`,
+});
 const kit = await import('./kit.js');
 const { llm, currentSlot, readConfigJson, slotAge, ConfigError, openStore, lockWhatsApp } = kit;
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 const lmsState = () => JSON.parse(fs.readFileSync(STATE, 'utf8'));
 const leaseFiles = () => (fs.existsSync(LEASES) ? fs.readdirSync(LEASES).filter((f) => f !== 'lock') : []);
-const OURS = { type: 'llm', modelKey: 'qwen3.8-27b-mlx', identifier: 'qwen3.8-27b-mlx', contextLength: 42496, status: 'idle', lastUsedTime: Date.now() };
-const OTHER = (idleMin) => ({ type: 'llm', modelKey: 'gemma', identifier: 'gemma', contextLength: 4096, status: 'idle', lastUsedTime: Date.now() - idleMin * 60000 });
+const OURS = {
+  type: 'llm',
+  modelKey: 'qwen3.8-27b-mlx',
+  identifier: 'qwen3.8-27b-mlx',
+  contextLength: 42496,
+  status: 'idle',
+  lastUsedTime: Date.now(),
+};
+const OTHER = (idleMin) => ({
+  type: 'llm',
+  modelKey: 'gemma',
+  identifier: 'gemma',
+  contextLength: 4096,
+  status: 'idle',
+  lastUsedTime: Date.now() - idleMin * 60000,
+});
 beforeEach(() => {
   fs.rmSync(LEASES, { recursive: true, force: true });
   fs.writeFileSync(STATE, JSON.stringify({ models: [], loads: 0, unloads: 0 }));
@@ -66,9 +105,18 @@ beforeEach(() => {
 
 /** Starts a worker process; resolves its first line ("acquired"/"busy") and keeps the child for killing. */
 function worker(name, delay, hold, waitMs) {
-  const child = spawn(process.execPath, [WORKER, name, String(delay), String(hold), ...(waitMs ? [String(waitMs)] : [])], { env: process.env });
+  const child = spawn(
+    process.execPath,
+    [WORKER, name, String(delay), String(hold), ...(waitMs ? [String(waitMs)] : [])],
+    { env: process.env },
+  );
   let out = '';
-  const said = new Promise((ok) => child.stdout.on('data', (d) => { out += d; if (out.includes('\n')) ok(out.trim()); }));
+  const said = new Promise((ok) =>
+    child.stdout.on('data', (d) => {
+      out += d;
+      if (out.includes('\n')) ok(out.trim());
+    }),
+  );
   const exited = new Promise((ok) => child.on('exit', (code) => ok(code)));
   return { child, said, exited };
 }
@@ -106,12 +154,22 @@ test('lease: a busy other model is waited for, then exit 75 with the lease remov
   const w = worker('a', 0, 100, 300);
   assert.equal(await w.said, 'busy');
   assert.equal(await w.exited, 75);
-  assert.deepEqual(lmsState().models.map((m) => m.identifier), ['gemma']);
+  assert.deepEqual(
+    lmsState().models.map((m) => m.identifier),
+    ['gemma'],
+  );
   assert.deepEqual(leaseFiles(), []);
 });
 
 test('lease: an idle other model is unloaded to make room', async () => {
-  fs.writeFileSync(STATE, JSON.stringify({ models: [OTHER(6), { ...OURS, contextLength: 4096, identifier: 'small', lastUsedTime: Date.now() - 9 * 60000 }], loads: 0, unloads: 0 }));
+  fs.writeFileSync(
+    STATE,
+    JSON.stringify({
+      models: [OTHER(6), { ...OURS, contextLength: 4096, identifier: 'small', lastUsedTime: Date.now() - 9 * 60000 }],
+      loads: 0,
+      unloads: 0,
+    }),
+  );
   const w = worker('a', 0, 100);
   assert.equal(await w.said, 'acquired');
   assert.equal(await w.exited, 0);
@@ -134,39 +192,67 @@ test('ask: thinking-off prefill, JSON schema, temperature 0, images; validates t
   let body;
   let reply = '{"text":"QGMPs"}';
   let gone = 0; // answer "No models loaded" this many times
-  const server = http.createServer((req, res) => {
-    let raw = '';
-    req.on('data', (d) => { raw += d; }).on('end', () => {
-      body = JSON.parse(raw);
-      if (gone-- > 0) { res.statusCode = 400; return res.end('{"error":{"message":"No models loaded. Please load a model"}}'); }
-      res.end(JSON.stringify({ choices: [{ message: { content: reply }, finish_reason: 'stop' }] }));
-    });
-  }).listen(0);
+  const server = http
+    .createServer((req, res) => {
+      let raw = '';
+      req
+        .on('data', (d) => {
+          raw += d;
+        })
+        .on('end', () => {
+          body = JSON.parse(raw);
+          if (gone-- > 0) {
+            res.statusCode = 400;
+            return res.end('{"error":{"message":"No models loaded. Please load a model"}}');
+          }
+          res.end(JSON.stringify({ choices: [{ message: { content: reply }, finish_reason: 'stop' }] }));
+        });
+    })
+    .listen(0);
   await new Promise((r) => server.on('listening', r));
   process.env.LMSTUDIO_URL = `http://127.0.0.1:${server.address().port}`;
   const { ask, release } = llm; // LMSTUDIO_URL is read per call
   try {
-    const schema = { type: 'object', additionalProperties: false, required: ['text'], properties: { text: { type: 'string', pattern: '^[A-Za-z0-9]{5}$' } } };
+    const schema = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['text'],
+      properties: { text: { type: 'string', pattern: '^[A-Za-z0-9]{5}$' } },
+    };
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-    assert.deepEqual(await ask({ system: 'Read it.', user: 'Captcha:', schema, images: [png], maxTokens: 20 }), { text: 'QGMPs' });
+    assert.deepEqual(await ask({ system: 'Read it.', user: 'Captcha:', schema, images: [png], maxTokens: 20 }), {
+      text: 'QGMPs',
+    });
     assert.equal(body.temperature, 0);
     assert.equal(body.max_tokens, 20);
     assert.equal(body.model, 'qwen3.8-27b-mlx');
     assert.equal(body.response_format.type, 'json_schema');
-    assert.deepEqual(body.messages.map((m) => m.role), ['system', 'user', 'assistant']);
+    assert.deepEqual(
+      body.messages.map((m) => m.role),
+      ['system', 'user', 'assistant'],
+    );
     assert.equal(body.messages[2].content, '<think>\n\n</think>\n\n');
     assert.match(body.messages[1].content[1].image_url.url, /^data:image\/png;base64,/);
     reply = '{"text":"too long"}';
-    await assert.rejects(ask({ system: 's', user: 'u', schema }), (e) => e.constructor.name === 'BadReply' && /should match/.test(e.message));
+    await assert.rejects(
+      ask({ system: 's', user: 'u', schema }),
+      (e) => e.constructor.name === 'BadReply' && /should match/.test(e.message),
+    );
     reply = '{"text":"AbCd1"}';
     gone = 1; // someone outside the protocol unloaded the model: taken again, then answered
     assert.deepEqual(await ask({ system: 's', user: 'u', schema }), { text: 'AbCd1' });
     reply = ' QGMPs\n'; // no schema: the reply text, no response_format, no system message
     assert.equal(await ask({ user: 'Read it.', images: [png], maxTokens: 20 }), 'QGMPs');
     assert.ok(!('response_format' in body));
-    assert.deepEqual(body.messages.map((m) => m.role), ['user', 'assistant']);
+    assert.deepEqual(
+      body.messages.map((m) => m.role),
+      ['user', 'assistant'],
+    );
     reply = '{"text":';
-    await assert.rejects(ask({ system: 's', user: 'u', schema }), (e) => e.constructor.name === 'BadReply' && /not JSON/.test(e.message));
+    await assert.rejects(
+      ask({ system: 's', user: 'u', schema }),
+      (e) => e.constructor.name === 'BadReply' && /not JSON/.test(e.message),
+    );
   } finally {
     release();
     server.close();
@@ -174,7 +260,21 @@ test('ask: thinking-off prefill, JSON schema, temperature 0, images; validates t
 });
 
 test('check: the schema subset ask() validates', () => {
-  const s = { type: 'object', required: ['tasks'], properties: { tasks: { type: 'array', maxItems: 2, items: { type: 'object', required: ['d'], properties: { d: { type: ['string', 'null'] }, n: { type: 'integer' }, k: { enum: ['a', 'b'] } } } } } };
+  const s = {
+    type: 'object',
+    required: ['tasks'],
+    properties: {
+      tasks: {
+        type: 'array',
+        maxItems: 2,
+        items: {
+          type: 'object',
+          required: ['d'],
+          properties: { d: { type: ['string', 'null'] }, n: { type: 'integer' }, k: { enum: ['a', 'b'] } },
+        },
+      },
+    },
+  };
   assert.equal(llm.check(s, { tasks: [{ d: null }, { d: 'x', n: 2, k: 'a' }] }), null);
   assert.match(llm.check(s, {}), /tasks is missing/);
   assert.match(llm.check(s, { tasks: [{ d: 1 }] }), /tasks\[0\]\.d should be string or null/);
@@ -191,9 +291,19 @@ test('config: defaults, validation of config.json', () => {
   const c = readConfigJson(dir, { maxInbox: 60 });
   assert.equal(c.maxInbox, 10);
   assert.equal(c.model, 'qwen3.8-27b-mlx');
-  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ maxInbx: 10, maxInbox: '10', runTimes: ['7:00'], timezone: 'Mars/Base' }));
-  assert.throws(() => readConfigJson(dir, { maxInbox: 60 }), (e) => e instanceof ConfigError
-    && /unknown key "maxInbx"/.test(e.message) && /"maxInbox" must be number, not string/.test(e.message) && /HH:MM/.test(e.message) && /time zone/.test(e.message));
+  fs.writeFileSync(
+    path.join(dir, 'config.json'),
+    JSON.stringify({ maxInbx: 10, maxInbox: '10', runTimes: ['7:00'], timezone: 'Mars/Base' }),
+  );
+  assert.throws(
+    () => readConfigJson(dir, { maxInbox: 60 }),
+    (e) =>
+      e instanceof ConfigError &&
+      /unknown key "maxInbx"/.test(e.message) &&
+      /"maxInbox" must be number, not string/.test(e.message) &&
+      /HH:MM/.test(e.message) &&
+      /time zone/.test(e.message),
+  );
 });
 
 test('config: slots in the bot time zone', () => {
@@ -206,7 +316,7 @@ test('config: slots in the bot time zone', () => {
   assert.equal(slotAge('2026-10-05 10:00', tz, at('2026-10-05T05:00:00Z')), 1800);
 });
 
-test('whatsapp lock: a dead owner\'s lock is taken and the Chrome it left behind is closed', async () => {
+test("whatsapp lock: a dead owner's lock is taken and the Chrome it left behind is closed", async () => {
   const dir = fs.mkdtempSync(path.join(tmp, 'wa-'));
   const profile = path.join(dir, 'wa-auth/session');
   fs.mkdirSync(profile, { recursive: true });
@@ -244,18 +354,34 @@ test('store: kv, processed, bot tables, old state.json imported once', () => {
 });
 
 test('scheduler: one run per slot; failures retried, 3 tries then 30 min apart', (t) => {
-  const settle = ['kern.boottime', 'kern.waketime'].map((k) => Number(execFileSync('sysctl', ['-n', k], { encoding: 'utf8' }).match(/sec = (\d+)/)?.[1] ?? 0));
+  const settle = ['kern.boottime', 'kern.waketime'].map((k) =>
+    Number(execFileSync('sysctl', ['-n', k], { encoding: 'utf8' }).match(/sec = (\d+)/)?.[1] ?? 0),
+  );
   if (Date.now() / 1000 - Math.max(...settle) < 600) return t.skip('Mac booted or woke < 10 min ago');
   const bot = fs.mkdtempSync(path.join(tmp, 'bot-'));
   fs.copyFileSync(KIT, path.join(bot, 'kit.js'));
   fs.writeFileSync(path.join(bot, 'package.json'), JSON.stringify({ name: 'fake-bot', type: 'module' }));
-  fs.writeFileSync(path.join(bot, 'bot.js'), "import fs from 'node:fs'; fs.appendFileSync('runs', process.env.BOT_SLOT + '\\n'); process.exit(Number(fs.readFileSync('code', 'utf8')));");
-  const hm = (d) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d);
-  fs.writeFileSync(path.join(bot, 'config.json'), JSON.stringify({ runTimes: [hm(new Date(Date.now() - 60000))], botOwnKey: 1 })); // a key only the bot knows
+  fs.writeFileSync(
+    path.join(bot, 'bot.js'),
+    "import fs from 'node:fs'; fs.appendFileSync('runs', process.env.BOT_SLOT + '\\n'); process.exit(Number(fs.readFileSync('code', 'utf8')));",
+  );
+  const hm = (d) =>
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).format(d);
+  fs.writeFileSync(
+    path.join(bot, 'config.json'),
+    JSON.stringify({ runTimes: [hm(new Date(Date.now() - 60000))], botOwnKey: 1 }),
+  ); // a key only the bot knows
   const tick = () => execFileSync(process.execPath, ['kit.js', 'tick'], { cwd: bot });
   const runs = () => fs.readFileSync(path.join(bot, 'runs'), 'utf8').trim().split('\n').length;
   fs.writeFileSync(path.join(bot, 'code'), '75');
-  tick(); tick(); tick();
+  tick();
+  tick();
+  tick();
   assert.equal(runs(), 3);
   tick(); // 3 tries: the next waits 30 min
   assert.equal(runs(), 3);
