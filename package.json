@@ -12,7 +12,9 @@
     "test": "node --disable-warning=ExperimentalWarning --test",
     "login": "node --disable-warning=ExperimentalWarning bot.js --login",
     "schedule": "node kit.js schedule",
-    "unschedule": "node kit.js unschedule"
+    "unschedule": "node kit.js unschedule",
+    "check": "biome check .",
+    "fix": "biome check --write ."
   },
   "dependencies": {
     "qrcode-terminal": "^0.12.0",
@@ -23,5 +25,8 @@
   "main": "bot.js",
   "puppeteer": {
     "skipDownload": true
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15"
   }
 }

@@ -142,7 +142,7 @@ runBot({
           const raw = await extractTasks(item, today, llm.ask);
           if (raw) {
             const { ok, dropped } = validateTasks(raw, { kid: item.kid, sourceId: item.sourceId, today, sourceText: item.text, posted: item.date });
-            dropped.forEach((d) => log.info(`dropped from ${item.sourceId}: "${d.t?.action_line}" (${d.why})`));
+            dropped.forEach((d) => { log.info(`dropped from ${item.sourceId}: "${d.t?.action_line}" (${d.why})`); });
             log.info(`${item.sourceId}: ${ok.length} task(s), ${saveTasks(db, ok, today, item)} new`);
           } else {
             // Unusable model reply: retry on the next runs; give up (logged) after 3 attempts.
@@ -151,7 +151,7 @@ runBot({
             if (tries < 3) { log.warn(`${item.sourceId}: will retry next run (attempt ${tries}/3)`); continue; }
             log.error(`${item.sourceId}: gave up after 3 attempts`);
           }
-          item.markIds.forEach((id) => store.markProcessed(id));
+          item.markIds.forEach((id) => { store.markProcessed(id); });
         }
         llm.release();
       }

@@ -187,7 +187,7 @@ const usage = { loadMs: 0, calls: 0, ms: 0 };
 const lms = (...a) => execFileSync(LMS, a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 300000 });
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 const leaseFiles = () => fs.readdirSync(LEASES).filter((f) => /\.\d+$/.test(f));
-const dropDead = () => leaseFiles().forEach((f) => alive(Number(f.split('.').pop())) || fs.rmSync(path.join(LEASES, f), { force: true }));
+const dropDead = () => leaseFiles().forEach((f) => { alive(Number(f.split('.').pop())) || fs.rmSync(path.join(LEASES, f), { force: true }); });
 
 /** Runs fn holding the lock dir (atomic mkdir; one left by a crash is stale after 120 s). */
 function locked(fn) {
