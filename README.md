@@ -77,7 +77,7 @@ The AI runs on the Mac; nothing is sent to the cloud. One-time codes are never f
 - **The model** is shared with the other bots through a lease protocol (`kit.js`) and starts loading while WhatsApp
   starts. If it can't be had, the run exits 75 and is retried.
 - **WhatsApp** is one linked login shared with pgrs-status-bot (`whatsappDir`: `~/.local/state/whatsapp`).
-- **Scheduling:** launchd runs `node kit.js tick` every 5 min (once per slot, 10 min after wake, retries, 10 h limit).
+- **Scheduling:** launchd runs `node kit.js tick` every 5 min (once per slot, 10 min after wake, retries, catches up a missed slot until the next one).
 
 ```
 bot.js            the run: collect → decide → act

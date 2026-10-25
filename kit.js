@@ -109,14 +109,6 @@ export function currentSlot(runTimes, timezone, now = new Date()) {
   return `${y.year}-${y.month}-${y.day} ${times.at(-1)}`;
 }
 
-/** Seconds since `slot` started (its wall-clock time in `timezone`). */
-export function slotAge(slot, timezone, now = new Date()) {
-  const asUtc = Date.parse(`${slot.replace(' ', 'T')}:00Z`);
-  const p = zoneParts(new Date(asUtc), timezone);
-  const offset = Date.parse(`${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:00Z`) - asUtc;
-  return Math.round((now - (asUtc - offset)) / 1000);
-}
-
 // ── log: console + data/bot.log (data/test.log under node --test), 2 MB rotation, secrets masked ──────────
 const SECRET_KEY = /TOKEN|SECRET|PASSWORD|MOBILE|PHONE|_KEY$/i;
 const tty = process.stdout.isTTY && !process.env.NO_COLOR;
@@ -847,14 +839,14 @@ export async function runBot({ name, defaults, env: envKeys, optionalEnv, schema
 }
 
 // ── scheduler: launchd calls `node kit.js tick` every 5 min. Each tick runs bot.js once per slot (the latest of
-//    config.json runTimes already passed, in timezone), at least 10 min after boot or wake; skips a slot older
-//    than 10 h; after a failure or exit 75 retries every 5 min up to 3 times, then every 30 min, until the next slot.
+//    config.json runTimes already passed, in timezone), at least 10 min after boot or wake, however late
+//    (until the next slot); after a failure or exit 75 retries every 5 min up to 3 times, then every 30 min, until the next slot.
 function tick(root = ROOT) {
   const secs = (k) => Number(execFileSync('sysctl', ['-n', k], { encoding: 'utf8' }).match(/sec = (\d+)/)?.[1] ?? 0);
   if (Date.now() / 1000 - Math.max(secs('kern.boottime'), secs('kern.waketime')) < 600) return; // let the Mac settle
   const c = { ...KIT_DEFAULTS, ...JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8')) }; // the bot validates the rest
   const slot = currentSlot(c.runTimes, c.timezone);
-  if (!slot || slotAge(slot, c.timezone) > 36000) return;
+  if (!slot) return;
   const data = path.join(root, 'data');
   fs.mkdirSync(data, { recursive: true });
   const stateFile = path.join(data, 'schedule.json');

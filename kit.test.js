@@ -78,7 +78,7 @@ Object.assign(process.env, {
   KIT_URL: `file://${KIT}`,
 });
 const kit = await import('./kit.js');
-const { llm, currentSlot, readConfigJson, slotAge, ConfigError, openStore, lockWhatsApp } = kit;
+const { llm, currentSlot, readConfigJson, ConfigError, openStore, lockWhatsApp } = kit;
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 const lmsState = () => JSON.parse(fs.readFileSync(STATE, 'utf8'));
@@ -314,7 +314,6 @@ test('config: slots in the bot time zone', () => {
   assert.equal(currentSlot(['20:00', '10:00'], tz, at('2026-10-05T03:00:00Z')), '2026-10-04 20:00'); // 08:30 IST
   assert.equal(currentSlot(['20:00'], tz, at('2026-10-05T18:40:00Z')), '2026-10-05 20:00'); // 00:10 IST on the 6th
   assert.equal(currentSlot([], tz), null);
-  assert.equal(slotAge('2026-10-05 10:00', tz, at('2026-10-05T05:00:00Z')), 1800);
 });
 
 test("whatsapp lock: a dead owner's lock is taken and the Chrome it left behind is closed", async () => {
@@ -401,7 +400,7 @@ test('kit.js is the shared copy, byte for byte', () => {
   const sha = crypto.createHash('sha256').update(fs.readFileSync(KIT)).digest('hex');
   assert.equal(
     sha,
-    '244788aeb6f126f376de6e8a3ed7a6ad5d7dedcccbe6322c5735c95a65eb4dbe',
+    '977fe211e689870bb1e0b02b034d0a2e99662845b36f607360fdb9e4b89e28ec',
     'kit.js drifted from the shared copy',
   );
 });
